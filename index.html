@@ -27,22 +27,41 @@
 	
 
 <script>
-if (location.protocol.substr(0, 4) === "file")
-{
-	alert("Web exports won't work until you upload them. (When running on the file: protocol, browsers block many features from working for security reasons.)");
-}
-</script>
-	
-	<noscript>
-		<div id="notSupportedWrap">
-			<h2 id="notSupportedTitle">This content requires JavaScript</h2>
-			<p class="notSupportedMessage">JavaScript appears to be disabled. Please enable it to view this content.</p>
-		</div>
-	</noscript>
-	<script src="scripts/modernjscheck.js"></script>
-	<script src="scripts/supportcheck.js"></script>
-	<script src="scripts/main.js" type="module"></script>
+        if (location.protocol.substr(0, 4) === "file") {
+            alert("Web exports won't work until you upload them. (When running on the file: protocol, browsers block many features from working for security reasons.)");
+        }
 
+        // Function to push game data to the server
+        async function submitGameData() {
+            const playerId = document.getElementById('player_id')?.value || 'test_player'; // Replace with actual player ID from game
+            const score = document.getElementById('score')?.value || 0; // Replace with game-generated score
+            const betAmount = document.getElementById('bet_amount')?.value || 0.00; // Replace with game-generated bet
+            const multiplier = document.getElementById('multiplier')?.value || 1.00; // Replace with game-generated multiplier
+
+            try {
+                const response = await fetch('save_game_data.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `player_id=${encodeURIComponent(playerId)}&score=${score}&bet_amount=${betAmount}&multiplier=${multiplier}`
+                });
+                const result = await response.json();
+                console.log(result.message || result.error);
+                alert(result.message || result.error);
+            } catch (error) {
+                console.error('Error submitting game data:', error);
+                alert('Error submitting game data: ' + error.message);
+            }
+        }
+    </script>
+    <noscript>
+        <div id="notSupportedWrap">
+            <h2 id="notSupportedTitle">This content requires JavaScript</h2>
+            <p class="notSupportedMessage">JavaScript appears to be disabled. Please enable it to view this content.</p>
+        </div>
+    </noscript>
+    <script src="scripts/modernjscheck.js"></script>
+    <script src="scripts/supportcheck.js"></script>
+    <script src="scripts/main.js" type="module"></script>
 
 </body> 
 </html>
