@@ -11,6 +11,7 @@ $pass = 'Kasun2052'; // Replace with your MySQL password
 
 
 
+
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -20,12 +21,6 @@ try {
     http_response_code(500);
     echo json_encode(['error' => 'Database connection failed']);
     exit;
-}
-
-function notifyWebSocket($game_id, $type, $data) {
-    // In production, use Redis or direct WebSocket message
-    file_put_contents('websocket_trigger.txt', json_encode(['game_id' => $game_id, 'type' => $type, 'data' => $data]) . "\n", FILE_APPEND);
-    error_log("Notified WebSocket: game_id=$game_id, type=$type");
 }
 
 function generateCrashPoint() {
@@ -154,8 +149,8 @@ switch ($action) {
                         echo json_encode(['error' => "Invalid crash point ($crash_point) or win rate ($win_rate)"]);
                         exit;
                     }
-                    $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, ?, FALSE)');
-                    $stmt->execute([$crash_point, $win_rate, $admin_id]);
+                    $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active, phase) VALUES (?, ?, ?, FALSE, ?)');
+                    $stmt->execute([$crash_point, $win_rate, $admin_id, 'betting']);
                 }
                 error_log("Crash points set by admin_id=$admin_id");
                 echo json_encode(['message' => 'Crash points set']);
@@ -168,37 +163,63 @@ switch ($action) {
         }
         break;
 
-    case 'get_next_game':
+    case 'get_game_state':
         if ($method === 'GET') {
             try {
-                $game_id = $_GET['game_id'] ?? null;
-                if ($game_id) {
-                    $stmt = $pdo->prepare('SELECT id, crash_point FROM games WHERE id = ? AND is_active = TRUE');
+                $game_id = $_GET['game_id'] ?? 0;
+                if ($game_id > 0) {
+                    $stmt = $pdo->prepare('SELECT id, crash_point, phase, start_time FROM games WHERE id = ?');
                     $stmt->execute([$game_id]);
                 } else {
-                    $stmt = $pdo->prepare('SELECT id, crash_point FROM games WHERE is_active = FALSE ORDER BY created_at ASC LIMIT 1');
-                    $stmt->execute();
+                    $stmt = $pdo->prepare('SELECT id, crash_point, phase, start_time FROM games WHERE is_active = TRUE AND phase != ? ORDER BY created_at DESC LIMIT 1');
+                    $stmt->execute(['crashed']);
                 }
                 $game = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($game) {
-                    if (!$game_id) {
-                        $stmt = $pdo->prepare('UPDATE games SET is_active = TRUE WHERE id = ?');
-                        $stmt->execute([$game['id']]);
-                    }
                     $game['crash_point'] = floatval($game['crash_point']);
-                    error_log("get_next_game: game_id={$game['id']}, crash_point={$game['crash_point']}");
-                    echo json_encode(['game_id' => $game['id'], 'crash_point' => $game['crash_point']]);
+                    $game['start_time'] = $game['start_time'] ? strtotime($game['start_time']) : null;
+                    $current_time = time();
+                    $elapsed = $game['start_time'] ? $current_time - $game['start_time'] : 0;
+                    $game['elapsed'] = $elapsed;
+
+                    if ($game['phase'] === 'betting' && $elapsed >= 20) {
+                        $stmt = $pdo->prepare('UPDATE games SET phase = ?, start_time = NOW() WHERE id = ?');
+                        $stmt->execute(['running', $game['id']]);
+                        $game['phase'] = 'running';
+                        $game['start_time'] = $current_time;
+                        $game['elapsed'] = 0;
+                    } elseif ($game['phase'] === 'running') {
+                        $multiplier = 1 + ($elapsed * 0.5);
+                        if ($multiplier >= $game['crash_point']) {
+                            $stmt = $pdo->prepare('UPDATE games SET phase = ?, is_active = FALSE WHERE id = ?');
+                            $stmt->execute(['crashed', $game['id']]);
+                            $game['phase'] = 'crashed';
+                        }
+                        $game['multiplier'] = round($multiplier, 2);
+                    } else {
+                        $game['multiplier'] = 1.0;
+                    }
+
+                    error_log("get_game_state: game_id={$game['id']}, phase={$game['phase']}, multiplier=" . ($game['multiplier'] ?? 1.0));
+                    echo json_encode($game);
                 } else {
                     $crash_point = generateCrashPoint();
                     $win_rate = round(mt_rand(10, 90), 2);
-                    $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, NULL, TRUE)');
-                    $stmt->execute([$crash_point, $win_rate]);
+                    $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active, phase, start_time) VALUES (?, ?, NULL, TRUE, ?, NOW())');
+                    $stmt->execute([$crash_point, $win_rate, 'betting']);
                     $new_game_id = $pdo->lastInsertId();
-                    error_log("get_next_game: No games available, created new game_id=$new_game_id, crash_point=$crash_point");
-                    echo json_encode(['game_id' => $new_game_id, 'crash_point' => $crash_point]);
+                    error_log("get_game_state: Created new game_id=$new_game_id, crash_point=$crash_point");
+                    echo json_encode([
+                        'game_id' => $new_game_id,
+                        'crash_point' => $crash_point,
+                        'phase' => 'betting',
+                        'start_time' => time(),
+                        'elapsed' => 0,
+                        'multiplier' => 1.0
+                    ]);
                 }
             } catch (PDOException $e) {
-                error_log("get_next_game PDO error: " . $e->getMessage());
+                error_log("get_game_state PDO error: " . $e->getMessage());
                 http_response_code(500);
                 echo json_encode(['error' => 'Database error']);
                 exit;
@@ -217,16 +238,15 @@ switch ($action) {
                 exit;
             }
             try {
-                $stmt = $pdo->prepare('UPDATE games SET is_active = FALSE WHERE id = ?');
-                $stmt->execute([$game_id]);
+                $stmt = $pdo->prepare('UPDATE games SET is_active = FALSE, phase = ? WHERE id = ?');
+                $stmt->execute(['crashed', $game_id]);
                 $crash_point = generateCrashPoint();
                 $win_rate = round(mt_rand(10, 90), 2);
-                $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, NULL, FALSE)');
-                $stmt->execute([$crash_point, $win_rate]);
+                $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active, phase, start_time) VALUES (?, ?, NULL, TRUE, ?, NOW())');
+                $stmt->execute([$crash_point, $win_rate, 'betting']);
                 $new_game_id = $pdo->lastInsertId();
                 error_log("Game reset: game_id=$game_id, new game created: game_id=$new_game_id, crash_point=$crash_point");
-                notifyWebSocket($game_id, 'game_reset', ['new_game_id' => $new_game_id]);
-                echo json_encode(['message' => 'Game reset, new game created']);
+                echo json_encode(['message' => 'Game reset, new game created', 'new_game_id' => $new_game_id]);
             } catch (PDOException $e) {
                 error_log("reset_game PDO error: " . $e->getMessage());
                 http_response_code(500);
@@ -263,10 +283,11 @@ switch ($action) {
                     exit;
                 }
 
-                $stmt = $pdo->prepare('SELECT id FROM games WHERE id = ? AND is_active = TRUE');
+                $stmt = $pdo->prepare('SELECT id, phase FROM games WHERE id = ? AND is_active = TRUE');
                 $stmt->execute([$game_id]);
-                if (!$stmt->fetch()) {
-                    error_log("Invalid or inactive game_id: $game_id");
+                $game = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$game || $game['phase'] !== 'betting') {
+                    error_log("Invalid or inactive game_id: $game_id, phase=" . ($game['phase'] ?? 'none'));
                     http_response_code(400);
                     echo json_encode(['error' => 'Invalid or inactive game ID']);
                     exit;
@@ -283,7 +304,6 @@ switch ($action) {
                 $stmt->execute([$user_id, $game_id, $bet_amount]);
                 $bet_id = $pdo->lastInsertId();
                 error_log("Bet placed: user_id=$user_id, game_id=$game_id, bet_amount=$bet_amount");
-                notifyWebSocket($game_id, 'new_bet', ['username' => $user['username'], 'bet_amount' => $bet_amount]);
                 echo json_encode(['message' => 'Bet placed', 'bet_id' => $bet_id]);
             } catch (PDOException $e) {
                 error_log("place_bet PDO error: " . $e->getMessage());
@@ -311,13 +331,13 @@ switch ($action) {
                     exit;
                 }
 
-                $stmt = $pdo->prepare('SELECT crash_point FROM games WHERE id = ?');
+                $stmt = $pdo->prepare('SELECT crash_point, phase FROM games WHERE id = ?');
                 $stmt->execute([$game_id]);
                 $game = $stmt->fetch(PDO::FETCH_ASSOC);
-                if (!$game) {
-                    error_log("Game not found: game_id=$game_id");
+                if (!$game || $game['phase'] !== 'running') {
+                    error_log("Game not found or not running: game_id=$game_id, phase=" . ($game['phase'] ?? 'none'));
                     http_response_code(404);
-                    echo json_encode(['error' => 'Game not found']);
+                    echo json_encode(['error' => 'Game not found or not running']);
                     exit;
                 }
                 $crash_point = floatval($game['crash_point']);
@@ -349,7 +369,6 @@ switch ($action) {
                 $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
                 $stmt->execute([$win_amount, $bet['user_id']]);
                 error_log("Cashout successful: bet_id=$bet_id, user_id={$bet['user_id']}, multiplier=$multiplier, win_amount=$win_amount");
-                notifyWebSocket($game_id, 'cashout', ['username' => $user['username'], 'multiplier' => $multiplier, 'win_amount' => $win_amount]);
                 echo json_encode(['message' => 'Cashout successful', 'win_amount' => $win_amount]);
             } catch (PDOException $e) {
                 error_log("cashout PDO error: " . $e->getMessage());
