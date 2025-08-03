@@ -49,7 +49,7 @@
         let lastHistoryTime = null;
         let lastGameState = null;
         let pollInterval = null;
-        const BETTING_DURATION = 20;
+        const BETTING_DURATION = 10;
 
         const ctx = document.getElementById('multiplierChart').getContext('2d');
         const chart = new Chart(ctx, {
@@ -86,9 +86,7 @@
             if (!gameId) return;
             try {
                 const response = await fetch(`api.php?action=get_active_bets&game_id=${gameId}`);
-                const responseText = await response.text();
-                console.log('updateActiveBetsFromDB raw response:', responseText, 'HTTP Status:', response.status);
-                const bets = JSON.parse(responseText);
+                const bets = await response.json();
                 if (bets.error) {
                     console.error('get_active_bets error:', bets.error);
                     return;
@@ -104,9 +102,7 @@
             if (!gameId || !userId) return;
             try {
                 const response = await fetch(`api.php?action=get_history&user_id=${userId}`);
-                const responseText = await response.text();
-                console.log('checkRecentCashouts raw response:', responseText, 'HTTP Status:', response.status);
-                const bets = JSON.parse(responseText);
+                const bets = await response.json();
                 if (bets.error) {
                     console.error('get_history error:', bets.error);
                     return;
@@ -130,7 +126,6 @@
             const status = document.getElementById('status');
 
             if (!userId) {
-                console.log('No userId in localStorage');
                 userInfo.innerHTML = 'Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
                 balance.textContent = 'Balance: Not logged in';
                 status.textContent = 'User not logged in.';
@@ -138,14 +133,9 @@
             }
 
             try {
-                console.log('Fetching user with ID:', userId);
                 const response = await fetch(`api.php?action=get_user&user_id=${userId}`);
-                const responseText = await response.text();
-                console.log('fetchUser raw response:', responseText, 'HTTP Status:', response.status);
-                const user = JSON.parse(responseText);
-
+                const user = await response.json();
                 if (user.error) {
-                    console.log('User not found for ID:', userId);
                     userInfo.innerHTML = 'User not found. Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
                     balance.textContent = 'Balance: User not found';
                     status.textContent = 'User not found. Logging out...';
@@ -156,7 +146,6 @@
 
                 const userBalance = parseFloat(user.balance);
                 if (isNaN(userBalance)) {
-                    console.error('Invalid balance value:', user.balance);
                     userInfo.innerHTML = `User: ${user.username}, Balance: Error <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
                     balance.textContent = 'Balance: Invalid balance';
                     status.textContent = 'Error: Invalid balance data';
@@ -176,7 +165,6 @@
         }
 
         function logout() {
-            console.log('Logging out user:', userId);
             localStorage.removeItem('userId');
             userId = null;
             document.getElementById('userInfo').innerHTML = 'Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
@@ -193,14 +181,9 @@
             historyList.innerHTML = '';
             try {
                 const betResponse = await fetch(`api.php?action=get_history&user_id=${userId}`);
-                const responseText = await betResponse.text();
-                console.log('fetchHistory raw response:', responseText, 'HTTP Status:', betResponse.status);
-                const bets = JSON.parse(responseText);
-
+                const bets = await betResponse.json();
                 const crashResponse = await fetch('api.php?action=get_crash_history');
-                const crashText = await crashResponse.text();
-                console.log('fetchHistory crashes raw response:', crashText, 'HTTP Status:', crashResponse.status);
-                const crashes = JSON.parse(crashText);
+                const crashes = await crashResponse.json();
 
                 const combinedHistory = [];
                 if (Array.isArray(bets)) {
@@ -279,6 +262,8 @@
                         countdown.textContent = 'Waiting for new game...';
                         betBtn.disabled = true;
                         cashoutBtn.disabled = true;
+                        gameRunning = false;
+                        betId = null;
                         return;
                     }
                     const remaining = Math.max(0, BETTING_DURATION - elapsed);
@@ -286,6 +271,7 @@
                     multiplierDisplay.textContent = 'Multiplier: 1.00x';
                     betBtn.disabled = false;
                     cashoutBtn.disabled = true;
+                    gameRunning = false;
                     chart.data.labels = [];
                     chart.data.datasets[0].data = [];
                     chart.update();
@@ -303,13 +289,13 @@
                     chart.data.labels.push(gameData.elapsed.toFixed(1));
                     chart.data.datasets[0].data.push(multiplier.toFixed(2));
                     chart.update();
-                    gameRunning = betId !== null;
+                    gameRunning = betId !== null; // Ensure gameRunning reflects bet status
                 } else if (gameData.phase === 'crashed') {
                     countdown.textContent = 'Waiting for next game...';
                     betBtn.disabled = true;
                     cashoutBtn.disabled = true;
                     multiplierDisplay.textContent = `Crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x`;
-                    if (gameRunning) {
+                    if (gameRunning && betId) {
                         status.textContent = `Crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x! You lost.`;
                         gameRunning = false;
                         betId = null;
@@ -389,7 +375,9 @@
 
                 betId = betData.bet_id;
                 gameId = betData.game_id;
+                gameRunning = true; // Set gameRunning after successful bet
                 document.getElementById('status').textContent = 'Bet placed! Waiting for game to start...';
+                document.getElementById('cashoutBtn').disabled = false; // Enable cashout button
                 fetchUser();
             } catch (error) {
                 console.error('placeBet error:', error.message);
@@ -401,12 +389,13 @@
 
         async function cashout() {
             if (!gameRunning || !betId || !gameId) {
+                console.log('Cashout blocked: gameRunning=', gameRunning, 'betId=', betId, 'gameId=', gameId);
                 document.getElementById('status').textContent = 'No active bet to cash out';
                 return;
             }
 
-            // Fetch latest game state before cashing out
             try {
+                // Fetch latest game state before cashing out
                 const response = await fetch(`api.php?action=get_game_state&game_id=${gameId}`);
                 const responseText = await response.text();
                 console.log('cashout get_game_state raw response:', responseText, 'HTTP Status:', response.status);
@@ -434,7 +423,7 @@
                 const data = JSON.parse(cashoutResponseText);
                 if (data.error) {
                     document.getElementById('status').textContent = `Cashout failed: ${data.error}`;
-                    if (data.error === 'Game crashed' || data.error === 'Game not found or not in running phase') {
+                    if (data.error === 'Game crashed' || data.error === 'Game not found or not running') {
                         gameRunning = false;
                         betId = null;
                         document.getElementById('cashoutBtn').disabled = true;
@@ -442,7 +431,7 @@
                     }
                     return;
                 }
-                document.getElementById('status').textContent = `Cashed out at ${data.multiplier.toFixed(2)}x! Won $${data.win_amount.toFixed(2)}`;
+                document.getElementById('status').textContent = `Cashed out at ${data.win_amount / parseFloat(document.getElementById('betAmount').value || 1).toFixed(2)}x! Won $${data.win_amount.toFixed(2)}`;
                 document.getElementById('cashoutBtn').disabled = true;
                 gameRunning = false;
                 betId = null;
@@ -466,15 +455,12 @@
             }
 
             try {
-                console.log('Sending top-up request:', { user_id: userId, amount, type: 'topup' });
                 const response = await fetch('api.php?action=request_transaction', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user_id: userId, amount, type: 'topup' })
                 });
-                const responseText = await response.text();
-                console.log('requestTopup raw response:', responseText, 'HTTP Status:', response.status);
-                const data = JSON.parse(responseText);
+                const data = await response.json();
                 document.getElementById('status').textContent = data.error || 'Top-up request submitted.';
                 document.getElementById('topupAmount').value = '';
             } catch (error) {
@@ -495,15 +481,12 @@
             }
 
             try {
-                console.log('Sending withdraw request:', { user_id: userId, amount, type: 'withdraw' });
                 const response = await fetch('api.php?action=request_transaction', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user_id: userId, amount, type: 'withdraw' })
                 });
-                const responseText = await response.text();
-                console.log('requestWithdraw raw response:', responseText, 'HTTP Status:', response.status);
-                const data = JSON.parse(responseText);
+                const data = await response.json();
                 document.getElementById('status').textContent = data.error || 'Withdraw request submitted.';
                 document.getElementById('withdrawAmount').value = '';
             } catch (error) {

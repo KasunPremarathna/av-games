@@ -10,7 +10,7 @@ $user = 'kasunpre_av';
 $pass = 'Kasun2052';
 
 // Configurable betting phase duration (in seconds)
-const BETTING_DURATION = 30;
+const BETTING_DURATION = 10;
 
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
@@ -354,7 +354,6 @@ switch ($action) {
                     exit;
                 }
 
-                // Fetch game state
                 $stmt = $pdo->prepare('SELECT crash_point, phase, start_time FROM games WHERE id = ? AND is_active = TRUE');
                 $stmt->execute([$game_id]);
                 $game = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -365,7 +364,6 @@ switch ($action) {
                     exit;
                 }
 
-                // Calculate server-side multiplier
                 $elapsed = time() - strtotime($game['start_time']);
                 $server_multiplier = round(1 + ($elapsed * 0.5), 2);
                 $crash_point = floatval($game['crash_point']);
@@ -378,7 +376,6 @@ switch ($action) {
                     exit;
                 }
 
-                // Use server multiplier if client multiplier is invalid
                 $final_multiplier = $multiplier > 0 && $multiplier <= $crash_point ? $multiplier : $server_multiplier;
                 if ($final_multiplier <= 0 || $final_multiplier > $crash_point) {
                     error_log("Invalid multiplier: client_multiplier=$multiplier, server_multiplier=$server_multiplier, crash_point=$crash_point");
@@ -387,7 +384,6 @@ switch ($action) {
                     exit;
                 }
 
-                // Validate bet
                 $stmt = $pdo->prepare('SELECT user_id, bet_amount FROM bets WHERE id = ? AND game_id = ? AND cashout_status IS NULL');
                 $stmt->execute([$bet_id, $game_id]);
                 $bet = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -402,7 +398,6 @@ switch ($action) {
                 $stmt->execute([$bet['user_id']]);
                 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-                // Process cashout
                 $win_amount = floatval($bet['bet_amount']) * $final_multiplier;
                 $stmt = $pdo->prepare('UPDATE bets SET cashout_multiplier = ?, win_amount = ?, cashout_status = ? WHERE id = ?');
                 $stmt->execute([$final_multiplier, $win_amount, 'approved', $bet_id]);
