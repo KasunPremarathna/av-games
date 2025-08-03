@@ -59,37 +59,66 @@
         });
 
         async function fetchUser() {
+            const userInfo = document.getElementById('userInfo');
+            const balance = document.getElementById('balance');
+            const status = document.getElementById('status');
+
             if (!userId) {
                 console.log('No userId in localStorage');
-                document.getElementById('userInfo').innerHTML = 'Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
-                document.getElementById('status').textContent = 'User not logged in.';
-                document.getElementById('balance').textContent = 'Balance: Not logged in';
-                return;
+                userInfo.innerHTML = 'Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
+                balance.textContent = 'Balance: Not logged in';
+                status.textContent = 'User not logged in.';
+                return false;
             }
+
             try {
-                const response = await fetch(`api.php?action=get_user&user_id=${userId}`);
+                console.log('Fetching user with ID:', userId);
+                const response = await fetch(`api.php?action=get_user&user_id=${userId}`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (!response.ok) {
+                    console.error('fetchUser HTTP error:', response.status, response.statusText);
+                    throw new Error(`HTTP error: ${response.status} ${response.statusText}`);
+                }
                 const user = await response.json();
                 console.log('fetchUser response:', user);
+
                 if (user.error) {
-                    document.getElementById('userInfo').innerHTML = 'User not found. Please <a href="register.html" class="text-blue-500">register</a>.';
-                    document.getElementById('balance').textContent = 'Balance: User not found';
-                } else {
-                    document.getElementById('userInfo').innerHTML = `User: ${user.username}, Balance: $${user.balance.toFixed(2)} <a href="login.html" class="text-blue-500" onclick="logout()">Logout</a>`;
-                    document.getElementById('balance').textContent = `Current Balance: $${user.balance.toFixed(2)}`;
+                    console.log('User not found for ID:', userId);
+                    userInfo.innerHTML = 'User not found. Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
+                    balance.textContent = 'Balance: User not found';
+                    status.textContent = 'User not found. Logging out...';
+                    localStorage.removeItem('userId');
+                    setTimeout(() => { window.location.href = 'login.html'; }, 2000);
+                    return false;
                 }
+
+                userInfo.innerHTML = `User: ${user.username}, Balance: $${user.balance.toFixed(2)} <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
+                balance.textContent = `Current Balance: $${user.balance.toFixed(2)}`;
+                return true;
             } catch (error) {
-                console.error('fetchUser error:', error);
-                document.getElementById('status').textContent = 'Error fetching user data';
+                console.error('fetchUser error:', error.message);
+                userInfo.innerHTML = `Error loading user data. <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
+                balance.textContent = 'Balance: Error';
+                status.textContent = `Error fetching user data: ${error.message}`;
+                return false;
             }
         }
 
         function logout() {
+            console.log('Logging out user:', userId);
             localStorage.removeItem('userId');
+            userId = null;
+            document.getElementById('userInfo').innerHTML = 'Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
+            document.getElementById('balance').textContent = 'Balance: Not logged in';
+            document.getElementById('status').textContent = 'Logged out successfully.';
+            document.getElementById('historyList').innerHTML = '';
             window.location.href = 'login.html';
         }
 
         async function fetchHistory() {
-            if (!userId) return;
+            if (!userId || !await fetchUser()) return;
             try {
                 const response = await fetch(`api.php?action=get_history&user_id=${userId}`);
                 const history = await response.json();
@@ -113,7 +142,7 @@
         }
 
         async function placeBet() {
-            if (!userId) {
+            if (!userId || !await fetchUser()) {
                 document.getElementById('status').textContent = 'Please login.';
                 return;
             }
@@ -164,7 +193,7 @@
             gameRunning = false;
             cancelAnimationFrame(animationFrame);
 
-            console.log('Cashout multiplier:', multiplier); // Debug multiplier
+            console.log('Cashout multiplier:', multiplier);
 
             try {
                 const response = await fetch('api.php?action=cashout', {
@@ -185,7 +214,7 @@
         }
 
         async function requestTopup() {
-            if (!userId) {
+            if (!userId || !await fetchUser()) {
                 document.getElementById('status').textContent = 'Please login.';
                 return;
             }
@@ -248,8 +277,7 @@
         }
 
         // Initialize
-        fetchUser();
-        fetchHistory();
+        fetchUser().then(() => fetchHistory());
     </script>
 </body>
 </html>

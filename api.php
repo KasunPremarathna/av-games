@@ -81,7 +81,8 @@ switch ($action) {
             $admin_id = $data['admin_id'] ?? 0;
             $crash_points = $data['crash_points'] ?? [];
 
-            // Validate admin_id
+            error_log("set_crash_points input: admin_id=$admin_id, crash_points=" . json_encode($crash_points));
+
             $stmt = $pdo->prepare('SELECT id FROM admins WHERE id = ?');
             $stmt->execute([$admin_id]);
             if (!$stmt->fetch()) {
@@ -90,7 +91,6 @@ switch ($action) {
                 exit;
             }
 
-            // Validate crash points
             if (empty($crash_points)) {
                 error_log("No crash points provided");
                 echo json_encode(['error' => 'No crash points provided']);
@@ -114,12 +114,20 @@ switch ($action) {
 
     case 'get_next_game':
         if ($method === 'GET') {
-            $stmt = $pdo->prepare('SELECT id, crash_point FROM games WHERE is_active = FALSE ORDER BY created_at ASC LIMIT 1');
-            $stmt->execute();
+            $game_id = $_GET['game_id'] ?? null;
+            if ($game_id) {
+                $stmt = $pdo->prepare('SELECT id, crash_point FROM games WHERE id = ? AND is_active = TRUE');
+                $stmt->execute([$game_id]);
+            } else {
+                $stmt = $pdo->prepare('SELECT id, crash_point FROM games WHERE is_active = FALSE ORDER BY created_at ASC LIMIT 1');
+                $stmt->execute();
+            }
             $game = $stmt->fetch(PDO::FETCH_ASSOC);
             if ($game) {
-                $stmt = $pdo->prepare('UPDATE games SET is_active = TRUE WHERE id = ?');
-                $stmt->execute([$game['id']]);
+                if (!$game_id) {
+                    $stmt = $pdo->prepare('UPDATE games SET is_active = TRUE WHERE id = ?');
+                    $stmt->execute([$game['id']]);
+                }
                 echo json_encode(['game_id' => $game['id'], 'crash_point' => $game['crash_point']]);
             } else {
                 echo json_encode(['error' => 'No games available']);
@@ -310,10 +318,27 @@ switch ($action) {
     case 'get_user':
         if ($method === 'GET') {
             $user_id = $_GET['user_id'] ?? 0;
-            $stmt = $pdo->prepare('SELECT id, username, balance FROM users WHERE id = ?');
-            $stmt->execute([$user_id]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            echo json_encode($user ?: ['error' => 'User not found']);
+            error_log("get_user input: user_id=$user_id");
+            if ($user_id <= 0) {
+                error_log("Invalid user_id: $user_id");
+                echo json_encode(['error' => 'Invalid user ID']);
+                exit;
+            }
+            try {
+                $stmt = $pdo->prepare('SELECT id, username, balance FROM users WHERE id = ?');
+                $stmt->execute([$user_id]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($user) {
+                    error_log("get_user success: user_id=$user_id, username={$user['username']}, balance={$user['balance']}");
+                    echo json_encode($user);
+                } else {
+                    error_log("User not found: user_id=$user_id");
+                    echo json_encode(['error' => 'User not found']);
+                }
+            } catch (PDOException $e) {
+                error_log("get_user error: " . $e->getMessage());
+                echo json_encode(['error' => 'Database error']);
+            }
         }
         break;
 
