@@ -94,8 +94,10 @@
                     return false;
                 }
 
-                userInfo.innerHTML = `User: ${user.username}, Balance: $${user.balance.toFixed(2)} <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
-                balance.textContent = `Current Balance: $${user.balance.toFixed(2)}`;
+                // Ensure balance is a number
+                const userBalance = parseFloat(user.balance) || 0;
+                userInfo.innerHTML = `User: ${user.username}, Balance: $${userBalance.toFixed(2)} <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
+                balance.textContent = `Current Balance: $${userBalance.toFixed(2)}`;
                 return true;
             } catch (error) {
                 console.error('fetchUser error:', error.message);
@@ -127,12 +129,12 @@
                 historyList.innerHTML = '';
                 history.forEach(bet => {
                     const li = document.createElement('li');
-                    li.textContent = `Game ${bet.game_id}: Bet $${bet.bet_amount}, ` +
+                    li.textContent = `Game ${bet.game_id}: Bet $${parseFloat(bet.bet_amount).toFixed(2)}, ` +
                         (bet.cashout_status === 'approved' ? 
-                            `Cashed out at ${bet.cashout_multiplier || 'N/A'}x, Won $${bet.win_amount || '0.00'}` :
+                            `Cashed out at ${parseFloat(bet.cashout_multiplier || 0).toFixed(2)}x, Won $${parseFloat(bet.win_amount || 0).toFixed(2)}` :
                             bet.cashout_status === 'pending' ? 
-                            `Pending cashout at ${bet.cashout_multiplier || 'N/A'}x` :
-                            `Crashed at ${bet.crash_point}x, ${bet.cashout_status === 'rejected' ? 'Cashout rejected' : 'Lost'}`);
+                            `Pending cashout at ${parseFloat(bet.cashout_multiplier || 0).toFixed(2)}x` :
+                            `Crashed at ${parseFloat(bet.crash_point).toFixed(2)}x, ${bet.cashout_status === 'rejected' ? 'Cashout rejected' : 'Lost'}`);
                     historyList.appendChild(li);
                 });
             } catch (error) {
@@ -261,7 +263,7 @@
                         gameRunning = false;
                         cancelAnimationFrame(animationFrame);
                         document.getElementById('status').textContent = gameData.error || 
-                            `Crashed at ${gameData.crash_point}x! You lost.`;
+                            `Crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x! You lost.`;
                         document.getElementById('cashoutBtn').disabled = true;
                         fetchUser();
                         fetchHistory();
@@ -279,7 +281,5 @@
         // Initialize
         fetchUser().then(() => fetchHistory());
     </script>
-    
 </body>
-
 </html>

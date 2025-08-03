@@ -30,7 +30,7 @@ switch ($action) {
             if ($username && $password) {
                 try {
                     $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
-                    $stmt = $pdo->prepare('INSERT INTO users (username, password) VALUES (?, ?)');
+                    $stmt = $pdo->prepare('INSERT INTO users (username, password, balance) VALUES (?, ?, 1000.00)');
                     $stmt->execute([$username, $hashedPassword]);
                     echo json_encode(['message' => 'User registered', 'user_id' => $pdo->lastInsertId()]);
                 } catch (PDOException $e) {
@@ -98,8 +98,8 @@ switch ($action) {
             }
 
             foreach ($crash_points as $point) {
-                $crash_point = $point['crash_point'] ?? 0;
-                $win_rate = $point['win_rate'] ?? 0;
+                $crash_point = floatval($point['crash_point'] ?? 0);
+                $win_rate = floatval($point['win_rate'] ?? 0);
                 if ($crash_point < 1 || $win_rate < 0 || $win_rate > 100) {
                     error_log("Invalid crash point or win rate: crash_point=$crash_point, win_rate=$win_rate");
                     echo json_encode(['error' => "Invalid crash point ($crash_point) or win rate ($win_rate)"]);
@@ -128,7 +128,7 @@ switch ($action) {
                     $stmt = $pdo->prepare('UPDATE games SET is_active = TRUE WHERE id = ?');
                     $stmt->execute([$game['id']]);
                 }
-                echo json_encode(['game_id' => $game['id'], 'crash_point' => $game['crash_point']]);
+                echo json_encode(['game_id' => $game['id'], 'crash_point' => floatval($game['crash_point'])]);
             } else {
                 echo json_encode(['error' => 'No games available']);
             }
@@ -139,7 +139,7 @@ switch ($action) {
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
             $user_id = $data['user_id'] ?? 0;
-            $bet_amount = $data['bet_amount'] ?? 0;
+            $bet_amount = floatval($data['bet_amount'] ?? 0);
             $game_id = $data['game_id'] ?? 0;
 
             error_log("place_bet input: " . print_r($data, true));
@@ -152,8 +152,9 @@ switch ($action) {
                 echo json_encode(['error' => 'User not found']);
                 exit;
             }
-            if ($user['balance'] < $bet_amount || $bet_amount <= 0) {
-                error_log("Invalid balance or input: balance={$user['balance']}, bet_amount=$bet_amount");
+            $balance = floatval($user['balance']);
+            if ($balance < $bet_amount || $bet_amount <= 0) {
+                error_log("Invalid balance or input: balance=$balance, bet_amount=$bet_amount");
                 echo json_encode(['error' => 'Insufficient balance or invalid input']);
                 exit;
             }
@@ -179,7 +180,7 @@ switch ($action) {
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
             $bet_id = $data['bet_id'] ?? 0;
-            $multiplier = isset($data['multiplier']) ? floatval($data['multiplier']) : 0;
+            $multiplier = floatval($data['multiplier'] ?? 0);
             $game_id = $data['game_id'] ?? 0;
 
             error_log("cashout input: " . print_r($data, true));
@@ -198,8 +199,9 @@ switch ($action) {
                 echo json_encode(['error' => 'Game not found']);
                 exit;
             }
-            if ($multiplier > $game['crash_point']) {
-                error_log("Multiplier exceeds crash point: multiplier=$multiplier, crash_point={$game['crash_point']}");
+            $crash_point = floatval($game['crash_point']);
+            if ($multiplier > $crash_point) {
+                error_log("Multiplier exceeds crash point: multiplier=$multiplier, crash_point=$crash_point");
                 echo json_encode(['error' => 'Game crashed']);
                 exit;
             }
@@ -213,7 +215,7 @@ switch ($action) {
                 exit;
             }
 
-            $win_amount = $bet['bet_amount'] * $multiplier;
+            $win_amount = floatval($bet['bet_amount']) * $multiplier;
             $stmt = $pdo->prepare('UPDATE bets SET cashout_multiplier = ?, win_amount = ?, cashout_status = ? WHERE id = ?');
             $stmt->execute([$multiplier, $win_amount, 'pending', $bet_id]);
             echo json_encode(['message' => 'Cashout request submitted']);
@@ -246,7 +248,7 @@ switch ($action) {
             $stmt->execute(['approved', $bet_id]);
 
             $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
-            $stmt->execute([$bet['win_amount'], $bet['user_id']]);
+            $stmt->execute([floatval($bet['win_amount']), $bet['user_id']]);
             echo json_encode(['message' => 'Cashout approved']);
         }
         break;
@@ -269,7 +271,7 @@ switch ($action) {
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
             $user_id = $data['user_id'] ?? 0;
-            $amount = $data['amount'] ?? 0;
+            $amount = floatval($data['amount'] ?? 0);
             if ($amount <= 0 || !$user_id) {
                 echo json_encode(['error' => 'Invalid amount or user ID']);
                 exit;
@@ -296,7 +298,7 @@ switch ($action) {
             $stmt->execute(['approved', $request_id]);
 
             $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
-            $stmt->execute([$request['amount'], $request['user_id']]);
+            $stmt->execute([floatval($request['amount']), $request['user_id']]);
             echo json_encode(['message' => 'Top-up approved']);
         }
         break;
@@ -329,6 +331,7 @@ switch ($action) {
                 $stmt->execute([$user_id]);
                 $user = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($user) {
+                    $user['balance'] = floatval($user['balance']); // Ensure balance is a float
                     error_log("get_user success: user_id=$user_id, username={$user['username']}, balance={$user['balance']}");
                     echo json_encode($user);
                 } else {
@@ -348,6 +351,12 @@ switch ($action) {
             $stmt = $pdo->prepare('SELECT b.*, g.crash_point FROM bets b JOIN games g ON b.game_id = g.id WHERE b.user_id = ? ORDER BY b.created_at DESC');
             $stmt->execute([$user_id]);
             $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($history as &$bet) {
+                $bet['bet_amount'] = floatval($bet['bet_amount']);
+                $bet['cashout_multiplier'] = floatval($bet['cashout_multiplier']);
+                $bet['win_amount'] = floatval($bet['win_amount']);
+                $bet['crash_point'] = floatval($bet['crash_point']);
+            }
             echo json_encode($history);
         }
         break;
@@ -356,6 +365,11 @@ switch ($action) {
         if ($method === 'GET') {
             $stmt = $pdo->query('SELECT b.id, b.user_id, b.bet_amount, b.cashout_multiplier, b.win_amount, u.username FROM bets b JOIN users u ON b.user_id = u.id WHERE b.cashout_status = "pending"');
             $cashouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($cashouts as &$cashout) {
+                $cashout['bet_amount'] = floatval($cashout['bet_amount']);
+                $cashout['cashout_multiplier'] = floatval($cashout['cashout_multiplier']);
+                $cashout['win_amount'] = floatval($cashout['win_amount']);
+            }
             echo json_encode($cashouts);
         }
         break;
@@ -364,9 +378,11 @@ switch ($action) {
         if ($method === 'GET') {
             $stmt = $pdo->query('SELECT t.id, t.user_id, t.amount, u.username FROM topup_requests t JOIN users u ON t.user_id = u.id WHERE t.status = "pending"');
             $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($requests as &$request) {
+                $request['amount'] = floatval($request['amount']);
+            }
             echo json_encode($requests);
         }
         break;
 }
-
 ?>
