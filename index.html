@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Crash Betting Game</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; }
+        #gameArea { margin: 20px; }
+        #multiplier { font-size: 2em; color: green; }
+        #history { margin-top: 20px; }
+        button, input { margin: 5px; padding: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Crash Betting Game</h1>
+    <div id="userInfo"></div>
+    <div id="gameArea">
+        <h2>Place Bet</h2>
+        <input type="number" id="betAmount" placeholder="Bet Amount" min="1">
+        <button onclick="placeBet()">Place Bet</button>
+        <button onclick="cashout()" id="cashoutBtn" disabled>Cash Out</button>
+        <div id="multiplier">Multiplier: 1.00x</div>
+        <div id="status"></div>
+    </div>
+    <div id="history">
+        <h2>Game History</h2>
+        <ul id="historyList"></ul>
+    </div>
+
+    <script>
+        let userId = 1; // For demo, replace with actual user ID after login
+        let gameId = null;
+        let betId = null;
+        let multiplier = 1.0;
+        let gameRunning = false;
+        let animationFrame;
+
+        // Fetch user info
+        async function fetchUser() {
+            const response = await fetch(`api.php?action=get_user&user_id=${userId}`);
+            const user = await response.json();
+            document.getElementById('userInfo').innerHTML = user.error || 
+                `User: ${user.username}, Balance: $${user.balance.toFixed(2)}`;
+        }
+
+        // Fetch game history
+        async function fetchHistory() {
+            const response = await fetch(`api.php?action=get_history&user_id=${userId}`);
+            const history = await response.json();
+            const historyList = document.getElementById('historyList');
+            historyList.innerHTML = '';
+            history.forEach(bet => {
+                const li = document.createElement('li');
+                li.textContent = `Game ${bet.game_id}: Bet $${bet.bet_amount}, ` +
+                    (bet.cashout_multiplier ? 
+                        `Cashed out at ${bet.cashout_multiplier}x, Won $${bet.win_amount}` : 
+                        `Crashed at ${bet.crash_point}x, Lost`);
+                historyList.appendChild(li);
+            });
+        }
+
+        // Place bet
+        async function placeBet() {
+            const betAmount = parseFloat(document.getElementById('betAmount').value);
+            if (!betAmount || betAmount <= 0) {
+                alert('Enter a valid bet amount');
+                return;
+            }
+
+            // Start new game
+            const gameResponse = await fetch('api.php?action=start_game', { method: 'POST' });
+            const gameData = await gameResponse.json();
+            gameId = gameData.game_id;
+
+            // Place bet
+            const betResponse = await fetch('api.php?action=place_bet', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: userId, bet_amount: betAmount, game_id: gameId })
+            });
+            const betData = await betResponse.json();
+            if (betData.error) {
+                alert(betData.error);
+                return;
+            }
+
+            betId = betData.bet_id;
+            gameRunning = true;
+            document.getElementById('cashoutBtn').disabled = false;
+            document.getElementById('status').textContent = 'Game started!';
+            startMultiplier();
+        }
+
+        // Cash out
+        async function cashout() {
+            if (!gameRunning || !betId) return;
+            gameRunning = false;
+            cancelAnimationFrame(animationFrame);
+
+            const response = await fetch('api.php?action=cashout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bet_id: betId, multiplier: multiplier.toFixed(2), game_id: gameId })
+            });
+            const data = await response.json();
+            document.getElementById('status').textContent = data.error || 
+                `Cashed out! Won $${data.win_amount}`;
+            document.getElementById('cashoutBtn').disabled = true;
+            fetchUser();
+            fetchHistory();
+        }
+
+        // Multiplier animation
+        function startMultiplier() {
+            multiplier = 1.0;
+            const startTime = Date.now();
+            async function updateMultiplier() {
+                if (!gameRunning) return;
+                const elapsed = (Date.now() - startTime) / 1000;
+                multiplier = 1 + elapsed * 0.5; // Increase by 0.5x per second
+                document.getElementById('multiplier').textContent = `Multiplier: ${multiplier.toFixed(2)}x`;
+
+                // Check if game crashed
+                const response = await fetch(`api.php?action=start_game&game_id=${gameId}`);
+                const gameData = await response.json();
+                if (multiplier >= gameData.crash_point) {
+                    gameRunning = false;
+                    cancelAnimationFrame(animationFrame);
+                    document.getElementById('status').textContent = `Crashed at ${gameData.crash_point}x! You lost.`;
+                    document.getElementById('cashoutBtn').disabled = true;
+                    fetchUser();
+                    fetchHistory();
+                } else {
+                    animationFrame = requestAnimationFrame(updateMultiplier);
+                }
+            }
+            animationFrame = requestAnimationFrame(updateMultiplier);
+        }
+
+        // Initialize
+        fetchUser();
+        fetchHistory();
+    </script>
+</body>
+</html>
