@@ -79,7 +79,7 @@ switch ($action) {
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
             $admin_id = $data['admin_id'] ?? 0;
-            $crash_points = $data['crash_points'] ?? []; // Array of [crash_point, win_rate]
+            $crash_points = $data['crash_points'] ?? [];
 
             // Validate admin_id
             $stmt = $pdo->prepare('SELECT id FROM admins WHERE id = ?');
@@ -171,10 +171,16 @@ switch ($action) {
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
             $bet_id = $data['bet_id'] ?? 0;
-            $multiplier = $data['multiplier'] ?? 0;
+            $multiplier = isset($data['multiplier']) ? floatval($data['multiplier']) : 0;
             $game_id = $data['game_id'] ?? 0;
 
             error_log("cashout input: " . print_r($data, true));
+
+            if ($multiplier <= 0) {
+                error_log("Invalid multiplier: $multiplier");
+                echo json_encode(['error' => 'Invalid multiplier']);
+                exit;
+            }
 
             $stmt = $pdo->prepare('SELECT crash_point FROM games WHERE id = ?');
             $stmt->execute([$game_id]);
