@@ -182,7 +182,7 @@ switch ($action) {
                     $elapsed = $game['start_time'] ? $current_time - $game['start_time'] : 0;
                     $game['elapsed'] = $elapsed;
 
-                    if ($game['phase'] === 'betting' && $elapsed >= 20) {
+                    if ($game['phase'] === 'betting' && $elapsed >= 15) { // Changed to 15 seconds
                         $stmt = $pdo->prepare('UPDATE games SET phase = ?, start_time = NOW() WHERE id = ?');
                         $stmt->execute(['running', $game['id']]);
                         $game['phase'] = 'running';

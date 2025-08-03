@@ -272,7 +272,7 @@
                 const cashoutBtn = document.getElementById('cashoutBtn');
 
                 if (gameData.phase === 'betting') {
-                    const remaining = Math.max(0, 20 - gameData.elapsed);
+                    const remaining = Math.max(0, 15 - gameData.elapsed); // Changed to 15 seconds
                     countdown.textContent = `Betting open: ${Math.ceil(remaining)}s`;
                     multiplierDisplay.textContent = 'Multiplier: 1.00x';
                     betBtn.disabled = false;
