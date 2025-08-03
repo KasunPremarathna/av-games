@@ -3,82 +3,77 @@
 <head>
     <meta charset="UTF-8">
     <title>Crash Betting Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; }
-        #gameArea, #registerArea { margin: 20px; }
-        #multiplier { font-size: 2em; color: green; }
-        #history { margin-top: 20px; }
-        button, input { margin: 5px; padding: 10px; }
+        body { font-family: Arial, sans-serif; }
+        canvas { max-width: 100%; }
     </style>
 </head>
-<body>
-    <h1>Crash Betting Game</h1>
-    <div id="registerArea">
-        <h2>Register</h2>
-        <input type="text" id="username" placeholder="Username">
-        <button onclick="registerUser()">Register</button>
-    </div>
-    <div id="userInfo"></div>
-    <div id="gameArea">
-        <h2>Place Bet</h2>
-        <input type="number" id="betAmount" placeholder="Bet Amount" min="1">
-        <button onclick="placeBet()">Place Bet</button>
-        <button onclick="cashout()" id="cashoutBtn" disabled>Cash Out</button>
-        <div id="multiplier">Multiplier: 1.00x</div>
-        <div id="status"></div>
-    </div>
-    <div id="history">
-        <h2>Game History</h2>
-        <ul id="historyList"></ul>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-4">
+        <h1 class="text-3xl font-bold text-center mb-4">Crash Betting Game</h1>
+        <div id="userInfo" class="mb-4"></div>
+        <div class="flex flex-col md:flex-row gap-4">
+            <div class="bg-white p-6 rounded-lg shadow-md md:w-1/2">
+                <h2 class="text-xl font-bold mb-4">Place Bet</h2>
+                <input type="number" id="betAmount" placeholder="Bet Amount" min="1" class="border p-2 rounded w-full mb-4">
+                <button onclick="placeBet()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Place Bet</button>
+                <button onclick="cashout()" id="cashoutBtn" disabled class="bg-green-500 text-white p-2 rounded w-full mt-2 hover:bg-green-600">Cash Out</button>
+                <div id="multiplier" class="text-2xl font-bold text-green-600 mt-4">Multiplier: 1.00x</div>
+                <div id="status" class="text-red-500 mt-2"></div>
+                <canvas id="multiplierChart" class="mt-4"></canvas>
+            </div>
+            <div class="bg-white p-6 rounded-lg shadow-md md:w-1/2">
+                <h2 class="text-xl font-bold mb-4">User Panel</h2>
+                <p id="balance" class="mb-4"></p>
+                <input type="number" id="topupAmount" placeholder="Top-up Amount" min="1" class="border p-2 rounded w-full mb-4">
+                <button onclick="requestTopup()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Request Top-up</button>
+                <h3 class="text-lg font-bold mt-4">Game History</h3>
+                <ul id="historyList" class="list-disc pl-5"></ul>
+            </div>
+        </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-        let userId = null; // Will be set after registration
+        let userId = localStorage.getItem('userId');
         let gameId = null;
         let betId = null;
         let multiplier = 1.0;
         let gameRunning = false;
         let animationFrame;
 
-        // Register user
-        async function registerUser() {
-            const username = document.getElementById('username').value.trim();
-            if (!username) {
-                document.getElementById('status').textContent = 'Enter a valid username';
-                return;
-            }
+        const ctx = document.getElementById('multiplierChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Multiplier',
+                    data: [],
+                    borderColor: '#16a34a',
+                    fill: false
+                }]
+            },
+            options: { scales: { y: { beginAtZero: true } } }
+        });
 
-            const response = await fetch('api.php?action=register', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username })
-            });
-            const data = await response.json();
-            if (data.error) {
-                document.getElementById('status').textContent = data.error;
-                return;
-            }
-
-            userId = data.user_id;
-            document.getElementById('status').textContent = 'Registration successful!';
-            document.getElementById('registerArea').style.display = 'none'; // Hide registration form
-            fetchUser();
-            fetchHistory();
-        }
-
-        // Fetch user info
         async function fetchUser() {
             if (!userId) {
-                document.getElementById('userInfo').innerHTML = 'Please register to play.';
+                document.getElementById('userInfo').innerHTML = 'Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
+                document.getElementById('status').textContent = 'User not logged in.';
                 return;
             }
             const response = await fetch(`api.php?action=get_user&user_id=${userId}`);
             const user = await response.json();
-            document.getElementById('userInfo').innerHTML = user.error || 
-                `User: ${user.username}, Balance: $${user.balance.toFixed(2)}`;
+            if (user.error) {
+                document.getElementById('userInfo').innerHTML = 'User not found. Please <a href="register.html" class="text-blue-500">register</a>.';
+            } else {
+                document.getElementById('userInfo').innerHTML = `User: ${user.username}, Balance: $${user.balance.toFixed(2)} <a href="register.html" class="text-blue-500">Logout</a>`;
+                document.getElementById('balance').textContent = `Current Balance: $${user.balance.toFixed(2)}`;
+            }
         }
 
-        // Fetch game history
         async function fetchHistory() {
             if (!userId) return;
             const response = await fetch(`api.php?action=get_history&user_id=${userId}`);
@@ -88,17 +83,18 @@
             history.forEach(bet => {
                 const li = document.createElement('li');
                 li.textContent = `Game ${bet.game_id}: Bet $${bet.bet_amount}, ` +
-                    (bet.cashout_multiplier ? 
-                        `Cashed out at ${bet.cashout_multiplier}x, Won $${bet.win_amount}` : 
-                        `Crashed at ${bet.crash_point}x, Lost`);
+                    (bet.cashout_status === 'approved' ? 
+                        `Cashed out at ${bet.cashout_multiplier}x, Won $${bet.win_amount}` :
+                        bet.cashout_status === 'pending' ? 
+                        `Pending cashout at ${bet.cashout_multiplier}x` :
+                        `Crashed at ${bet.crash_point}x, ${bet.cashout_status === 'rejected' ? 'Cashout rejected' : 'Lost'}`);
                 historyList.appendChild(li);
             });
         }
 
-        // Place bet
         async function placeBet() {
             if (!userId) {
-                document.getElementById('status').textContent = 'Please register first.';
+                document.getElementById('status').textContent = 'Please register or login.';
                 return;
             }
             const betAmount = parseFloat(document.getElementById('betAmount').value);
@@ -107,7 +103,11 @@
                 return;
             }
 
-            const gameResponse = await fetch('api.php?action=start_game', { method: 'POST' });
+            const gameResponse = await fetch('api.php?action=set_crash_point', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ admin_id: 1, crash_point: 0 }) // Admin sets crash point later
+            });
             const gameData = await gameResponse.json();
             if (gameData.error) {
                 document.getElementById('status').textContent = gameData.error;
@@ -133,7 +133,6 @@
             startMultiplier();
         }
 
-        // Cash out
         async function cashout() {
             if (!gameRunning || !betId) return;
             gameRunning = false;
@@ -145,24 +144,48 @@
                 body: JSON.stringify({ bet_id: betId, multiplier: multiplier.toFixed(2), game_id: gameId })
             });
             const data = await response.json();
-            document.getElementById('status').textContent = data.error || 
-                `Cashed out! Won $${data.win_amount}`;
+            document.getElementById('status').textContent = data.error || 'Cashout request submitted. Waiting for admin approval.';
             document.getElementById('cashoutBtn').disabled = true;
             fetchUser();
             fetchHistory();
         }
 
-        // Multiplier animation
+        async function requestTopup() {
+            if (!userId) {
+                document.getElementById('status').textContent = 'Please register or login.';
+                return;
+            }
+            const amount = parseFloat(document.getElementById('topupAmount').value);
+            if (isNaN(amount) || amount <= 0) {
+                document.getElementById('status').textContent = 'Enter a valid top-up amount';
+                return;
+            }
+
+            const response = await fetch('api.php?action=topup_request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: userId, amount })
+            });
+            const data = await response.json();
+            document.getElementById('status').textContent = data.error || 'Top-up request submitted.';
+            document.getElementById('topupAmount').value = '';
+        }
+
         function startMultiplier() {
             multiplier = 1.0;
             const startTime = Date.now();
+            chart.data.labels = [];
+            chart.data.datasets[0].data = [];
             async function updateMultiplier() {
                 if (!gameRunning) return;
                 const elapsed = (Date.now() - startTime) / 1000;
                 multiplier = 1 + elapsed * 0.5;
                 document.getElementById('multiplier').textContent = `Multiplier: ${multiplier.toFixed(2)}x`;
+                chart.data.labels.push(elapsed.toFixed(1));
+                chart.data.datasets[0].data.push(multiplier.toFixed(2));
+                chart.update();
 
-                const response = await fetch(`api.php?action=start_game&game_id=${gameId}`);
+                const response = await fetch(`api.php?action=set_crash_point&game_id=${gameId}`);
                 const gameData = await response.json();
                 if (gameData.error || multiplier >= gameData.crash_point) {
                     gameRunning = false;
@@ -181,6 +204,7 @@
 
         // Initialize
         fetchUser();
+        fetchHistory();
     </script>
 </body>
 </html>

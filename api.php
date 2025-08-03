@@ -39,6 +39,37 @@ switch ($action) {
         }
         break;
 
+    case 'admin_login':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $username = $data['username'] ?? '';
+            $password = $data['password'] ?? '';
+            $stmt = $pdo->prepare('SELECT id, password FROM admins WHERE username = ?');
+            $stmt->execute([$username]);
+            $admin = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($admin && password_verify($password, $admin['password'])) {
+                echo json_encode(['message' => 'Admin logged in', 'admin_id' => $admin['id']]);
+            } else {
+                echo json_encode(['error' => 'Invalid credentials']);
+            }
+        }
+        break;
+
+    case 'set_crash_point':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $admin_id = $data['admin_id'] ?? 0;
+            $crash_point = $data['crash_point'] ?? 0;
+            if ($crash_point < 1 || !$admin_id) {
+                echo json_encode(['error' => 'Invalid crash point or admin ID']);
+                exit;
+            }
+            $stmt = $pdo->prepare('INSERT INTO games (crash_point, set_by_admin_id) VALUES (?, ?)');
+            $stmt->execute([$crash_point, $admin_id]);
+            echo json_encode(['game_id' => $pdo->lastInsertId(), 'crash_point' => $crash_point]);
+        }
+        break;
+
     case 'place_bet':
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
@@ -112,26 +143,96 @@ switch ($action) {
             }
 
             $win_amount = $bet['bet_amount'] * $multiplier;
-            $stmt = $pdo->prepare('UPDATE bets SET cashout_multiplier = ?, win_amount = ? WHERE id = ?');
-            $stmt->execute([$multiplier, $win_amount, $bet_id]);
-
-            $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
-            $stmt->execute([$win_amount, $bet['user_id']]);
-            echo json_encode(['message' => 'Cashout successful', 'win_amount' => $win_amount]);
+            $stmt = $pdo->prepare('UPDATE bets SET cashout_multiplier = ?, win_amount = ?, cashout_status = ? WHERE id = ?');
+            $stmt->execute([$multiplier, $win_amount, 'pending', $bet_id]);
+            echo json_encode(['message' => 'Cashout request submitted']);
         }
         break;
 
-    case 'start_game':
+    case 'approve_cashout':
         if ($method === 'POST') {
-            $crash_point = round(mt_rand(100, 1000) / 100, 2);
-            $stmt = $pdo->prepare('INSERT INTO games (crash_point) VALUES (?)');
-            $stmt->execute([$crash_point]);
-            echo json_encode(['game_id' => $pdo->lastInsertId(), 'crash_point' => $crash_point]);
-        } elseif ($method === 'GET' && isset($_GET['game_id'])) {
-            $stmt = $pdo->prepare('SELECT crash_point FROM games WHERE id = ?');
-            $stmt->execute([$_GET['game_id']]);
-            $game = $stmt->fetch(PDO::FETCH_ASSOC);
-            echo json_encode($game ?: ['error' => 'Game not found']);
+            $data = json_decode(file_get_contents('php://input'), true);
+            $bet_id = $data['bet_id'] ?? 0;
+            $admin_id = $data['admin_id'] ?? 0;
+
+            $stmt = $pdo->prepare('SELECT user_id, win_amount FROM bets WHERE id = ? AND cashout_status = ?');
+            $stmt->execute([$bet_id, 'pending']);
+            $bet = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$bet) {
+                echo json_encode(['error' => 'Invalid or already processed bet']);
+                exit;
+            }
+
+            $stmt = $pdo->prepare('UPDATE bets SET cashout_status = ? WHERE id = ?');
+            $stmt->execute(['approved', $bet_id]);
+
+            $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
+            $stmt->execute([$bet['win_amount'], $bet['user_id']]);
+            echo json_encode(['message' => 'Cashout approved']);
+        }
+        break;
+
+    case 'reject_cashout':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $bet_id = $data['bet_id'] ?? 0;
+            $stmt = $pdo->prepare('UPDATE bets SET cashout_status = ? WHERE id = ? AND cashout_status = ?');
+            $stmt->execute(['rejected', $bet_id, 'pending']);
+            if ($stmt->rowCount() > 0) {
+                echo json_encode(['message' => 'Cashout rejected']);
+            } else {
+                echo json_encode(['error' => 'Invalid or already processed bet']);
+            }
+        }
+        break;
+
+    case 'topup_request':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $user_id = $data['user_id'] ?? 0;
+            $amount = $data['amount'] ?? 0;
+            if ($amount <= 0 || !$user_id) {
+                echo json_encode(['error' => 'Invalid amount or user ID']);
+                exit;
+            }
+            $stmt = $pdo->prepare('INSERT INTO topup_requests (user_id, amount) VALUES (?, ?)');
+            $stmt->execute([$user_id, $amount]);
+            echo json_encode(['message' => 'Top-up request submitted']);
+        }
+        break;
+
+    case 'approve_topup':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $request_id = $data['request_id'] ?? 0;
+            $stmt = $pdo->prepare('SELECT user_id, amount FROM topup_requests WHERE id = ? AND status = ?');
+            $stmt->execute([$request_id, 'pending']);
+            $request = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$request) {
+                echo json_encode(['error' => 'Invalid or already processed request']);
+                exit;
+            }
+
+            $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ?');
+            $stmt->execute(['approved', $request_id]);
+
+            $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
+            $stmt->execute([$request['amount'], $request['user_id']]);
+            echo json_encode(['message' => 'Top-up approved']);
+        }
+        break;
+
+    case 'reject_topup':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $request_id = $data['request_id'] ?? 0;
+            $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ? AND status = ?');
+            $stmt->execute(['rejected', $request_id, 'pending']);
+            if ($stmt->rowCount() > 0) {
+                echo json_encode(['message' => 'Top-up rejected']);
+            } else {
+                echo json_encode(['error' => 'Invalid or already processed request']);
+            }
         }
         break;
 
@@ -152,6 +253,22 @@ switch ($action) {
             $stmt->execute([$user_id]);
             $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
             echo json_encode($history);
+        }
+        break;
+
+    case 'get_pending_cashouts':
+        if ($method === 'GET') {
+            $stmt = $pdo->query('SELECT b.id, b.user_id, b.bet_amount, b.cashout_multiplier, b.win_amount, u.username FROM bets b JOIN users u ON b.user_id = u.id WHERE b.cashout_status = "pending"');
+            $cashouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode($cashouts);
+        }
+        break;
+
+    case 'get_pending_topups':
+        if ($method === 'GET') {
+            $stmt = $pdo->query('SELECT t.id, t.user_id, t.amount, u.username FROM topup_requests t JOIN users u ON t.user_id = u.id WHERE t.status = "pending"');
+            $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            echo json_encode($requests);
         }
         break;
 }

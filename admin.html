@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Admin Panel - Crash Betting Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: Arial, sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-4">
+        <h1 class="text-3xl font-bold text-center mb-4">Admin Panel</h1>
+        <div id="adminInfo" class="mb-4"></div>
+        <div class="bg-white p-6 rounded-lg shadow-md mb-4">
+            <h2 class="text-xl font-bold mb-4">Admin Login</h2>
+            <input type="text" id="adminUsername" placeholder="Username" class="border p-2 rounded w-full mb-4">
+            <input type="password" id="adminPassword" placeholder="Password" class="border p-2 rounded w-full mb-4">
+            <button onclick="adminLogin()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Login</button>
+            <p id="adminStatus" class="text-red-500 mt-2 text-center"></p>
+        </div>
+        <div class="bg-white p-6 rounded-lg shadow-md mb-4">
+            <h2 class="text-xl font-bold mb-4">Set Crash Point</h2>
+            <input type="number" id="crashPoint" placeholder="Crash Point (e.g., 2.50)" step="0.01" min="1" class="border p-2 rounded w-full mb-4">
+            <button onclick="setCrashPoint()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Set Crash Point</button>
+        </div>
+        <div class="bg-white p-6 rounded-lg shadow-md mb-4">
+            <h2 class="text-xl font-bold mb-4">Pending Cashouts</h2>
+            <ul id="cashoutList" class="list-disc pl-5"></ul>
+        </div>
+        <div class="bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-bold mb-4">Pending Top-up Requests</h2>
+            <ul id="topupList" class="list-disc pl-5"></ul>
+        </div>
+    </div>
+
+    <script>
+        let adminId = null;
+
+        async function adminLogin() {
+            const username = document.getElementById('adminUsername').value.trim();
+            const password = document.getElementById('adminPassword').value;
+            if (!username || !password) {
+                document.getElementById('adminStatus').textContent = 'Enter valid credentials';
+                return;
+            }
+
+            const response = await fetch('api.php?action=admin_login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            const data = await response.json();
+            if (data.error) {
+                document.getElementById('adminStatus').textContent = data.error;
+            } else {
+                adminId = data.admin_id;
+                document.getElementById('adminInfo').textContent = `Logged in as ${username}`;
+                document.getElementById('adminStatus').textContent = '';
+                fetchPendingCashouts();
+                fetchPendingTopups();
+            }
+        }
+
+        async function setCrashPoint() {
+            if (!adminId) {
+                document.getElementById('adminStatus').textContent = 'Please login first.';
+                return;
+            }
+            const crashPoint = parseFloat(document.getElementById('crashPoint').value);
+            if (isNaN(crashPoint) || crashPoint < 1) {
+                document.getElementById('adminStatus').textContent = 'Enter a valid crash point';
+                return;
+            }
+
+            const response = await fetch('api.php?action=set_crash_point', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ admin_id: adminId, crash_point: crashPoint })
+            });
+            const data = await response.json();
+            document.getElementById('adminStatus').textContent = data.error || `Crash point set to ${data.crash_point}x for game ${data.game_id}`;
+        }
+
+        async function fetchPendingCashouts() {
+            if (!adminId) return;
+            const response = await fetch('api.php?action=get_pending_cashouts');
+            const cashouts = await response.json();
+            const cashoutList = document.getElementById('cashoutList');
+            cashoutList.innerHTML = '';
+            cashouts.forEach(cashout => {
+                const li = document.createElement('li');
+                li.innerHTML = `User ${cashout.username}: Bet $${cashout.bet_amount}, Cashout at ${cashout.cashout_multiplier}x, Win $${cashout.win_amount} ` +
+                    `<button onclick="approveCashout(${cashout.id})" class="bg-green-500 text-white p-1 rounded ml-2">Approve</button> ` +
+                    `<button onclick="rejectCashout(${cashout.id})" class="bg-red-500 text-white p-1 rounded ml-2">Reject</button>`;
+                cashoutList.appendChild(li);
+            });
+        }
+
+        async function approveCashout(betId) {
+            if (!adminId) return;
+            const response = await fetch('api.php?action=approve_cashout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bet_id: betId, admin_id: adminId })
+            });
+            const data = await response.json();
+            document.getElementById('adminStatus').textContent = data.error || data.message;
+            fetchPendingCashouts();
+        }
+
+        async function rejectCashout(betId) {
+            if (!adminId) return;
+            const response = await fetch('api.php?action=reject_cashout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bet_id: betId })
+            });
+            const data = await response.json();
+            document.getElementById('adminStatus').textContent = data.error || data.message;
+            fetchPendingCashouts();
+        }
+
+        async function fetchPendingTopups() {
+            if (!adminId) return;
+            const response = await fetch('api.php?action=get_pending_topups');
+            const requests = await response.json();
+            const topupList = document.getElementById('topupList');
+            topupList.innerHTML = '';
+            requests.forEach(request => {
+                const li = document.createElement('li');
+                li.innerHTML = `User ${request.username}: Top-up $${request.amount} ` +
+                    `<button onclick="approveTopup(${request.id})" class="bg-green-500 text-white p-1 rounded ml-2">Approve</button> ` +
+                    `<button onclick="rejectTopup(${request.id})" class="bg-red-500 text-white p-1 rounded ml-2">Reject</button>`;
+                topupList.appendChild(li);
+            });
+        }
+
+        async function approveTopup(requestId) {
+            if (!adminId) return;
+            const response = await fetch('api.php?action=approve_topup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ request_id: requestId })
+            });
+            const data = await response.json();
+            document.getElementById('adminStatus').textContent = data.error || data.message;
+            fetchPendingTopups();
+        }
+
+        async function rejectTopup(requestId) {
+            if (!adminId) return;
+            const response = await fetch('api.php?action=reject_topup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ request_id: requestId })
+            });
+            const data = await response.json();
+            document.getElementById('adminStatus').textContent = data.error || data.message;
+            fetchPendingTopups();
+        }
+    </script>
+</body>
+</html>

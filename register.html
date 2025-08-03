@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Register - Crash Betting Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: Arial, sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+    <div class="bg-white p-6 rounded-lg shadow-md w-96">
+        <h2 class="text-2xl font-bold mb-4 text-center">Register</h2>
+        <input type="text" id="username" placeholder="Username" class="border p-2 mb-4 w-full rounded">
+        <button onclick="registerUser()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Register</button>
+        <p id="status" class="text-red-500 mt-2 text-center"></p>
+        <p class="mt-4 text-center">Already have an account? <a href="index.html" class="text-blue-500">Login</a></p>
+    </div>
+
+    <script>
+        async function registerUser() {
+            const username = document.getElementById('username').value.trim();
+            if (!username) {
+                document.getElementById('status').textContent = 'Enter a valid username';
+                return;
+            }
+
+            const response = await fetch('api.php?action=register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username })
+            });
+            const data = await response.json();
+            if (data.error) {
+                document.getElementById('status').textContent = data.error;
+            } else {
+                document.getElementById('status').textContent = 'Registration successful! Redirecting...';
+                localStorage.setItem('userId', data.user_id);
+                setTimeout(() => window.location.href = 'index.html', 2000);
+            }
+        }
+    </script>
+</body>
+</html>
