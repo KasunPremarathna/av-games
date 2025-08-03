@@ -16,8 +16,9 @@
         <div class="flex flex-col md:flex-row gap-4">
             <div class="bg-white p-6 rounded-lg shadow-md md:w-1/2">
                 <h2 class="text-xl font-bold mb-4">Place Bet</h2>
+                <div id="countdown" class="text-2xl font-bold text-blue-600 mb-4">Waiting for next game...</div>
                 <input type="number" id="betAmount" placeholder="Bet Amount" min="1" class="border p-2 rounded w-full mb-4">
-                <button onclick="placeBet()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Place Bet</button>
+                <button onclick="placeBet()" id="betBtn" disabled class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Place Bet</button>
                 <button onclick="cashout()" id="cashoutBtn" disabled class="bg-green-500 text-white p-2 rounded w-full mt-2 hover:bg-green-600">Cash Out</button>
                 <div id="multiplier" class="text-2xl font-bold text-green-600 mt-4">Multiplier: 1.00x</div>
                 <div id="status" class="text-red-500 mt-2"></div>
@@ -41,7 +42,8 @@
         let betId = null;
         let multiplier = 1.0;
         let gameRunning = false;
-        let animationFrame;
+        let countdownInterval = null;
+        let countdownTime = 20; // 20 seconds countdown
 
         const ctx = document.getElementById('multiplierChart').getContext('2d');
         const chart = new Chart(ctx, {
@@ -73,10 +75,7 @@
 
             try {
                 console.log('Fetching user with ID:', userId);
-                const response = await fetch(`api.php?action=get_user&user_id=${userId}`, {
-                    method: 'GET',
-                    headers: { 'Content-Type': 'application/json' }
-                });
+                const response = await fetch(`api.php?action=get_user&user_id=${userId}`);
                 if (!response.ok) {
                     console.error('fetchUser HTTP error:', response.status, response.statusText);
                     throw new Error(`HTTP error: ${response.status} ${response.statusText}`);
@@ -140,15 +139,35 @@
                     li.textContent = `Game ${bet.game_id}: Bet $${parseFloat(bet.bet_amount || 0).toFixed(2)}, ` +
                         (bet.cashout_status === 'approved' ? 
                             `Cashed out at ${parseFloat(bet.cashout_multiplier || 0).toFixed(2)}x, Won $${parseFloat(bet.win_amount || 0).toFixed(2)}` :
-                            bet.cashout_status === 'pending' ? 
-                            `Pending cashout at ${parseFloat(bet.cashout_multiplier || 0).toFixed(2)}x` :
-                            `Crashed at ${parseFloat(bet.crash_point || 0).toFixed(2)}x, ${bet.cashout_status === 'rejected' ? 'Cashout rejected' : 'Lost'}`);
+                            `Crashed at ${parseFloat(bet.crash_point || 0).toFixed(2)}x, Lost`);
                     historyList.appendChild(li);
                 });
             } catch (error) {
                 console.error('fetchHistory error:', error);
                 document.getElementById('status').textContent = 'Error fetching history';
             }
+        }
+
+        async function startCountdown() {
+            document.getElementById('betBtn').disabled = false;
+            document.getElementById('cashoutBtn').disabled = true;
+            document.getElementById('multiplier').textContent = 'Multiplier: 1.00x';
+            chart.data.labels = [];
+            chart.data.datasets[0].data = [];
+            chart.update();
+
+            countdownTime = 20;
+            document.getElementById('countdown').textContent = `Betting open: ${countdownTime}s`;
+            countdownInterval = setInterval(() => {
+                countdownTime--;
+                document.getElementById('countdown').textContent = `Betting open: ${countdownTime}s`;
+                if (countdownTime <= 0) {
+                    clearInterval(countdownInterval);
+                    document.getElementById('countdown').textContent = 'Game in progress...';
+                    document.getElementById('betBtn').disabled = true;
+                    if (gameRunning) startMultiplier();
+                }
+            }, 1000);
         }
 
         async function placeBet() {
@@ -167,7 +186,7 @@
                 const gameData = await gameResponse.json();
                 console.log('get_next_game response:', gameData);
                 if (gameData.error) {
-                    document.getElementById('status').textContent = gameData.error + '. Please wait for the admin to set new games.';
+                    document.getElementById('status').textContent = gameData.error;
                     return;
                 }
                 gameId = gameData.game_id;
@@ -187,8 +206,7 @@
                 betId = betData.bet_id;
                 gameRunning = true;
                 document.getElementById('cashoutBtn').disabled = false;
-                document.getElementById('status').textContent = 'Bet placed! Game started!';
-                startMultiplier();
+                document.getElementById('status').textContent = 'Bet placed! Waiting for game to start...';
             } catch (error) {
                 console.error('placeBet error:', error);
                 document.getElementById('status').textContent = 'Error placing bet: ' + error.message;
@@ -201,6 +219,7 @@
                 return;
             }
             gameRunning = false;
+            clearInterval(countdownInterval);
             cancelAnimationFrame(animationFrame);
 
             console.log('Cashout multiplier:', multiplier);
@@ -213,16 +232,12 @@
                 });
                 const data = await response.json();
                 console.log('cashout response:', data);
-                document.getElementById('status').textContent = data.error || 'Cashout request submitted. Waiting for admin approval.';
+                document.getElementById('status').textContent = data.error || `Cashed out at ${multiplier.toFixed(2)}x!`;
                 document.getElementById('cashoutBtn').disabled = true;
-
-                // Mark game as inactive after cashout
-                await fetch(`api.php?action=reset_game&game_id=${gameId}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
+                document.getElementById('countdown').textContent = 'Waiting for next game...';
                 fetchUser();
                 fetchHistory();
+                startCountdown(); // Start new countdown after cashout
             } catch (error) {
                 console.error('cashout error:', error);
                 document.getElementById('status').textContent = 'Error submitting cashout: ' + error.message;
@@ -279,14 +294,10 @@
                         document.getElementById('status').textContent = gameData.error || 
                             `Crashed at ${parseFloat(gameData.crash_point || 0).toFixed(2)}x! You lost.`;
                         document.getElementById('cashoutBtn').disabled = true;
-
-                        // Mark game as inactive after crash
-                        await fetch(`api.php?action=reset_game&game_id=${gameId}`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' }
-                        });
+                        document.getElementById('countdown').textContent = 'Waiting for next game...';
                         fetchUser();
                         fetchHistory();
+                        startCountdown(); // Start new countdown after crash
                     } else {
                         animationFrame = requestAnimationFrame(updateMultiplier);
                     }
@@ -299,7 +310,10 @@
         }
 
         // Initialize
-        fetchUser().then(() => fetchHistory());
+        fetchUser().then(() => {
+            fetchHistory();
+            startCountdown();
+        });
     </script>
 </body>
 </html>
