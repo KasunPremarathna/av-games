@@ -169,7 +169,7 @@ switch ($action) {
             try {
                 $game_id = $_GET['game_id'] ?? 0;
                 if ($game_id > 0) {
-                    $stmt = $pdo->prepare('SELECT id, crash_point, phase, start_time FROM games WHERE id = ?');
+                    $stmt = $pdo->prepare('SELECT id, crash_point, phase, start_time FROM games WHERE id = ? AND is_active = TRUE');
                     $stmt->execute([$game_id]);
                 } else {
                     $stmt = $pdo->prepare('SELECT id, crash_point, phase, start_time FROM games WHERE is_active = TRUE AND phase != ? ORDER BY created_at DESC LIMIT 1');
@@ -278,7 +278,7 @@ switch ($action) {
             $bet_amount = floatval($data['bet_amount'] ?? 0);
             $game_id = $data['game_id'] ?? 0;
 
-            error_log("place_bet input: " . print_r($data, true));
+            error_log("place_bet input: user_id=$user_id, bet_amount=$bet_amount, game_id=$game_id");
 
             try {
                 $stmt = $pdo->prepare('SELECT balance FROM users WHERE id = ?');
@@ -298,14 +298,23 @@ switch ($action) {
                     exit;
                 }
 
+                // Validate game_id; fall back to latest active game if invalid
                 $stmt = $pdo->prepare('SELECT id, phase FROM games WHERE id = ? AND is_active = TRUE');
                 $stmt->execute([$game_id]);
                 $game = $stmt->fetch(PDO::FETCH_ASSOC);
                 if (!$game || $game['phase'] !== 'betting') {
-                    error_log("Invalid or inactive game_id: $game_id, phase=" . ($game['phase'] ?? 'none'));
-                    http_response_code(400);
-                    echo json_encode(['error' => 'Invalid or inactive game ID']);
-                    exit;
+                    error_log("Invalid or inactive game_id: $game_id, phase=" . ($game['phase'] ?? 'none') . ". Fetching latest active game.");
+                    $stmt = $pdo->prepare('SELECT id, phase FROM games WHERE is_active = TRUE AND phase = ? ORDER BY created_at DESC LIMIT 1');
+                    $stmt->execute(['betting']);
+                    $game = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if (!$game) {
+                        error_log("No active betting game found for user_id=$user_id");
+                        http_response_code(400);
+                        echo json_encode(['error' => 'No active game available']);
+                        exit;
+                    }
+                    $game_id = $game['id'];
+                    error_log("Using fallback game_id: $game_id");
                 }
 
                 $stmt = $pdo->prepare('UPDATE users SET balance = balance - ? WHERE id = ?');
@@ -318,8 +327,8 @@ switch ($action) {
                 $stmt = $pdo->prepare('INSERT INTO bets (user_id, game_id, bet_amount) VALUES (?, ?, ?)');
                 $stmt->execute([$user_id, $game_id, $bet_amount]);
                 $bet_id = $pdo->lastInsertId();
-                error_log("Bet placed: user_id=$user_id, game_id=$game_id, bet_amount=$bet_amount");
-                echo json_encode(['message' => 'Bet placed', 'bet_id' => $bet_id]);
+                error_log("Bet placed: user_id=$user_id, game_id=$game_id, bet_amount=$bet_amount, bet_id=$bet_id");
+                echo json_encode(['message' => 'Bet placed', 'bet_id' => $bet_id, 'game_id' => $game_id]);
             } catch (PDOException $e) {
                 error_log("place_bet PDO error: " . $e->getMessage());
                 http_response_code(500);
@@ -336,7 +345,7 @@ switch ($action) {
             $multiplier = floatval($data['multiplier'] ?? 0);
             $game_id = $data['game_id'] ?? 0;
 
-            error_log("cashout input: " . print_r($data, true));
+            error_log("cashout input: bet_id=$bet_id, multiplier=$multiplier, game_id=$game_id");
 
             try {
                 if ($multiplier <= 0) {

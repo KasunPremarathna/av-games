@@ -340,7 +340,7 @@
             clearInterval(pollInterval);
             pollInterval = setInterval(() => {
                 updateGameState();
-            }, lastGameState && lastGameState.phase === 'running' ? 500 : 2000); // 500ms during game, 2s during betting
+            }, lastGameState && lastGameState.phase === 'running' ? 500 : 1000); // 500ms during game, 1s during betting
             updateGameState(); // Immediate update
         }
 
@@ -356,26 +356,46 @@
             }
 
             try {
+                // Fetch latest game state to ensure valid gameId
+                const response = await fetch(`api.php?action=get_game_state&game_id=${gameId || 0}`);
+                const responseText = await response.text();
+                console.log('placeBet get_game_state raw response:', responseText, 'HTTP Status:', response.status);
+                const gameData = JSON.parse(responseText);
+                if (gameData.error || gameData.phase !== 'betting') {
+                    document.getElementById('status').textContent = gameData.error || 'Cannot place bet: Game not in betting phase';
+                    gameId = null; // Reset to force new game fetch
+                    updateGameState();
+                    return;
+                }
+                gameId = gameData.game_id;
+
                 console.log('Sending bet request:', { user_id: userId, bet_amount: betAmount, game_id: gameId });
                 const betResponse = await fetch('api.php?action=place_bet', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user_id: userId, bet_amount: betAmount, game_id: gameId })
                 });
-                const responseText = await betResponse.text();
-                console.log('place_bet raw response:', responseText, 'HTTP Status:', betResponse.status);
-                const betData = JSON.parse(responseText);
+                const betResponseText = await betResponse.text();
+                console.log('place_bet raw response:', betResponseText, 'HTTP Status:', betResponse.status);
+                const betData = JSON.parse(betResponseText);
                 if (betData.error) {
                     document.getElementById('status').textContent = betData.error;
+                    if (betData.error === 'Invalid or inactive game ID' || betData.error === 'No active game available') {
+                        gameId = null; // Reset to force new game fetch
+                        updateGameState();
+                    }
                     return;
                 }
 
                 betId = betData.bet_id;
+                gameId = betData.game_id; // Update gameId from server response
                 document.getElementById('status').textContent = 'Bet placed! Waiting for game to start...';
                 fetchUser();
             } catch (error) {
                 console.error('placeBet error:', error.message);
                 document.getElementById('status').textContent = 'Error placing bet: ' + error.message;
+                gameId = null; // Reset to force new game fetch
+                updateGameState();
             }
         }
 
@@ -473,6 +493,4 @@
         });
     </script>
 </body>
-
-
 </html>
