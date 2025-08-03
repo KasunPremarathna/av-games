@@ -49,6 +49,7 @@
         let lastHistoryTime = null; // Track last history check
         let lastGameState = null; // Cache game state
         let pollInterval = null;
+        const BETTING_DURATION = 10; // Match server-side duration
 
         const ctx = document.getElementById('multiplierChart').getContext('2d');
         const chart = new Chart(ctx, {
@@ -272,7 +273,15 @@
                 const cashoutBtn = document.getElementById('cashoutBtn');
 
                 if (gameData.phase === 'betting') {
-                    const remaining = Math.max(0, 15 - gameData.elapsed); // Changed to 15 seconds
+                    const elapsed = parseFloat(gameData.elapsed);
+                    if (elapsed > 30 || isNaN(elapsed)) { // Handle invalid elapsed time
+                        console.warn('Invalid elapsed time:', elapsed);
+                        countdown.textContent = 'Waiting for new game...';
+                        betBtn.disabled = true;
+                        cashoutBtn.disabled = true;
+                        return;
+                    }
+                    const remaining = Math.max(0, BETTING_DURATION - elapsed);
                     countdown.textContent = `Betting open: ${Math.ceil(remaining)}s`;
                     multiplierDisplay.textContent = 'Multiplier: 1.00x';
                     betBtn.disabled = false;

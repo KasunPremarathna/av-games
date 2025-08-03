@@ -10,7 +10,8 @@ $user = 'kasunpre_av'; // Replace with your MySQL username
 $pass = 'Kasun2052'; // Replace with your MySQL password
 
 
-
+// Configurable betting phase duration (in seconds)
+const BETTING_DURATION = 10;
 
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
@@ -182,13 +183,23 @@ switch ($action) {
                     $elapsed = $game['start_time'] ? $current_time - $game['start_time'] : 0;
                     $game['elapsed'] = $elapsed;
 
-                    if ($game['phase'] === 'betting' && $elapsed >= 15) { // Changed to 15 seconds
+                    // Reset stale betting phase (e.g., elapsed > 30s)
+                    if ($game['phase'] === 'betting' && $elapsed > 30) {
+                        error_log("Stale betting phase detected: game_id={$game['id']}, elapsed=$elapsed. Resetting game.");
+                        $stmt = $pdo->prepare('UPDATE games SET phase = ?, is_active = FALSE WHERE id = ?');
+                        $stmt->execute(['crashed', $game['id']]);
+                        $game = null; // Trigger new game creation below
+                    }
+                    // Handle betting phase transition
+                    elseif ($game['phase'] === 'betting' && $elapsed >= BETTING_DURATION) {
                         $stmt = $pdo->prepare('UPDATE games SET phase = ?, start_time = NOW() WHERE id = ?');
                         $stmt->execute(['running', $game['id']]);
                         $game['phase'] = 'running';
                         $game['start_time'] = $current_time;
                         $game['elapsed'] = 0;
-                    } elseif ($game['phase'] === 'running') {
+                    }
+                    // Handle running phase
+                    elseif ($game['phase'] === 'running') {
                         $multiplier = 1 + ($elapsed * 0.5);
                         if ($multiplier >= $game['crash_point']) {
                             $stmt = $pdo->prepare('UPDATE games SET phase = ?, is_active = FALSE WHERE id = ?');
@@ -200,9 +211,13 @@ switch ($action) {
                         $game['multiplier'] = 1.0;
                     }
 
-                    error_log("get_game_state: game_id={$game['id']}, phase={$game['phase']}, multiplier=" . ($game['multiplier'] ?? 1.0));
-                    echo json_encode($game);
-                } else {
+                    if ($game) {
+                        error_log("get_game_state: game_id={$game['id']}, phase={$game['phase']}, multiplier=" . ($game['multiplier'] ?? 1.0) . ", elapsed=$elapsed");
+                        echo json_encode($game);
+                    }
+                }
+
+                if (!$game) {
                     $crash_point = generateCrashPoint();
                     $win_rate = round(mt_rand(10, 90), 2);
                     $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active, phase, start_time) VALUES (?, ?, NULL, TRUE, ?, NOW())');
