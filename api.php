@@ -146,6 +146,22 @@ switch ($action) {
         }
         break;
 
+    case 'reset_game':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $game_id = $data['game_id'] ?? 0;
+            if ($game_id <= 0) {
+                error_log("Invalid game_id for reset_game: $game_id");
+                echo json_encode(['error' => 'Invalid game ID']);
+                exit;
+            }
+            $stmt = $pdo->prepare('UPDATE games SET is_active = FALSE WHERE id = ?');
+            $stmt->execute([$game_id]);
+            error_log("Game reset: game_id=$game_id");
+            echo json_encode(['message' => 'Game reset']);
+        }
+        break;
+
     case 'place_bet':
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
@@ -354,7 +370,7 @@ switch ($action) {
                 $stmt->execute([$user_id]);
                 $user = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($user) {
-                    $user['balance'] = floatval($user['balance']); // Ensure balance is a float
+                    $user['balance'] = floatval($user['balance']);
                     error_log("get_user success: user_id=$user_id, username={$user['username']}, balance={$user['balance']}, type=" . gettype($user['balance']));
                     echo json_encode($user);
                 } else {

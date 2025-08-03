@@ -94,7 +94,6 @@
                     return false;
                 }
 
-                // Robustly handle balance
                 console.log('Raw balance value:', user.balance, 'Type:', typeof user.balance);
                 const userBalance = typeof user.balance === 'string' ? parseFloat(user.balance.replace(/[^0-9.-]+/g, '')) : parseFloat(user.balance);
                 if (isNaN(userBalance)) {
@@ -168,7 +167,7 @@
                 const gameData = await gameResponse.json();
                 console.log('get_next_game response:', gameData);
                 if (gameData.error) {
-                    document.getElementById('status').textContent = gameData.error;
+                    document.getElementById('status').textContent = gameData.error + '. Please wait for the admin to set new games.';
                     return;
                 }
                 gameId = gameData.game_id;
@@ -192,7 +191,7 @@
                 startMultiplier();
             } catch (error) {
                 console.error('placeBet error:', error);
-                document.getElementById('status').textContent = 'Error placing bet';
+                document.getElementById('status').textContent = 'Error placing bet: ' + error.message;
             }
         }
 
@@ -216,11 +215,17 @@
                 console.log('cashout response:', data);
                 document.getElementById('status').textContent = data.error || 'Cashout request submitted. Waiting for admin approval.';
                 document.getElementById('cashoutBtn').disabled = true;
+
+                // Mark game as inactive after cashout
+                await fetch(`api.php?action=reset_game&game_id=${gameId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
                 fetchUser();
                 fetchHistory();
             } catch (error) {
                 console.error('cashout error:', error);
-                document.getElementById('status').textContent = 'Error submitting cashout';
+                document.getElementById('status').textContent = 'Error submitting cashout: ' + error.message;
             }
         }
 
@@ -246,7 +251,7 @@
                 document.getElementById('topupAmount').value = '';
             } catch (error) {
                 console.error('requestTopup error:', error);
-                document.getElementById('status').textContent = 'Error submitting top-up request';
+                document.getElementById('status').textContent = 'Error submitting top-up request: ' + error.message;
             }
         }
 
@@ -274,6 +279,12 @@
                         document.getElementById('status').textContent = gameData.error || 
                             `Crashed at ${parseFloat(gameData.crash_point || 0).toFixed(2)}x! You lost.`;
                         document.getElementById('cashoutBtn').disabled = true;
+
+                        // Mark game as inactive after crash
+                        await fetch(`api.php?action=reset_game&game_id=${gameId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' }
+                        });
                         fetchUser();
                         fetchHistory();
                     } else {
@@ -281,7 +292,7 @@
                     }
                 } catch (error) {
                     console.error('updateMultiplier error:', error);
-                    document.getElementById('status').textContent = 'Error checking game status';
+                    document.getElementById('status').textContent = 'Error checking game status: ' + error.message;
                 }
             }
             animationFrame = requestAnimationFrame(updateMultiplier);
