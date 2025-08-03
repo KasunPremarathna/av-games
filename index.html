@@ -43,6 +43,7 @@
         let multiplier = 1.0;
         let gameRunning = false;
         let countdownInterval = null;
+        let animationFrame = null;
         let countdownTime = 20; // 20 seconds countdown
 
         const ctx = document.getElementById('multiplierChart').getContext('2d');
@@ -127,19 +128,52 @@
         }
 
         async function fetchHistory() {
-            if (!userId || !await fetchUser()) return;
+            const historyList = document.getElementById('historyList');
+            historyList.innerHTML = '';
             try {
-                const response = await fetch(`api.php?action=get_history&user_id=${userId}`);
-                const history = await response.json();
-                console.log('fetchHistory response:', history);
-                const historyList = document.getElementById('historyList');
-                historyList.innerHTML = '';
-                history.forEach(bet => {
+                // Fetch user betting history
+                const betResponse = await fetch(`api.php?action=get_history&user_id=${userId}`);
+                const bets = await betResponse.json();
+                console.log('fetchHistory bets response:', bets);
+
+                // Fetch crash history
+                const crashResponse = await fetch('api.php?action=get_crash_history');
+                const crashes = await crashResponse.json();
+                console.log('fetchHistory crashes response:', crashes);
+
+                // Combine and sort by creation time (assuming bets and games have created_at)
+                const combinedHistory = [];
+                if (Array.isArray(bets)) {
+                    bets.forEach(bet => {
+                        combinedHistory.push({
+                            type: 'bet',
+                            game_id: bet.game_id,
+                            created_at: bet.created_at,
+                            text: `Game ${bet.game_id}: Bet $${parseFloat(bet.bet_amount || 0).toFixed(2)}, ` +
+                                (bet.cashout_status === 'approved' ?
+                                    `Cashed out at ${parseFloat(bet.cashout_multiplier || 0).toFixed(2)}x, Won $${parseFloat(bet.win_amount || 0).toFixed(2)}` :
+                                    `Crashed at ${parseFloat(bet.crash_point || 0).toFixed(2)}x, Lost`)
+                        });
+                    });
+                }
+                if (Array.isArray(crashes)) {
+                    crashes.forEach(crash => {
+                        combinedHistory.push({
+                            type: 'crash',
+                            game_id: crash.id,
+                            created_at: crash.created_at,
+                            text: `Game ${crash.id}: Crashed at ${parseFloat(crash.crash_point || 0).toFixed(2)}x`
+                        });
+                    });
+                }
+
+                // Sort by created_at (descending)
+                combinedHistory.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+                // Display combined history
+                combinedHistory.forEach(item => {
                     const li = document.createElement('li');
-                    li.textContent = `Game ${bet.game_id}: Bet $${parseFloat(bet.bet_amount || 0).toFixed(2)}, ` +
-                        (bet.cashout_status === 'approved' ? 
-                            `Cashed out at ${parseFloat(bet.cashout_multiplier || 0).toFixed(2)}x, Won $${parseFloat(bet.win_amount || 0).toFixed(2)}` :
-                            `Crashed at ${parseFloat(bet.crash_point || 0).toFixed(2)}x, Lost`);
+                    li.textContent = item.text;
                     historyList.appendChild(li);
                 });
             } catch (error) {
@@ -149,6 +183,22 @@
         }
 
         async function startCountdown() {
+            // Fetch a new game
+            try {
+                const gameResponse = await fetch('api.php?action=get_next_game');
+                const gameData = await gameResponse.json();
+                console.log('startCountdown get_next_game response:', gameData);
+                if (gameData.error) {
+                    document.getElementById('status').textContent = gameData.error;
+                    return;
+                }
+                gameId = gameData.game_id;
+            } catch (error) {
+                console.error('startCountdown error:', error);
+                document.getElementById('status').textContent = 'Error starting game: ' + error.message;
+                return;
+            }
+
             document.getElementById('betBtn').disabled = false;
             document.getElementById('cashoutBtn').disabled = true;
             document.getElementById('multiplier').textContent = 'Multiplier: 1.00x';
@@ -165,7 +215,7 @@
                     clearInterval(countdownInterval);
                     document.getElementById('countdown').textContent = 'Game in progress...';
                     document.getElementById('betBtn').disabled = true;
-                    if (gameRunning) startMultiplier();
+                    startMultiplier();
                 }
             }, 1000);
         }
@@ -182,15 +232,6 @@
             }
 
             try {
-                const gameResponse = await fetch('api.php?action=get_next_game');
-                const gameData = await gameResponse.json();
-                console.log('get_next_game response:', gameData);
-                if (gameData.error) {
-                    document.getElementById('status').textContent = gameData.error;
-                    return;
-                }
-                gameId = gameData.game_id;
-
                 const betResponse = await fetch('api.php?action=place_bet', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -237,7 +278,7 @@
                 document.getElementById('countdown').textContent = 'Waiting for next game...';
                 fetchUser();
                 fetchHistory();
-                startCountdown(); // Start new countdown after cashout
+                startCountdown();
             } catch (error) {
                 console.error('cashout error:', error);
                 document.getElementById('status').textContent = 'Error submitting cashout: ' + error.message;
@@ -276,7 +317,6 @@
             chart.data.labels = [];
             chart.data.datasets[0].data = [];
             async function updateMultiplier() {
-                if (!gameRunning) return;
                 const elapsed = (Date.now() - startTime) / 1000;
                 multiplier = 1 + elapsed * 0.5;
                 document.getElementById('multiplier').textContent = `Multiplier: ${multiplier.toFixed(2)}x`;
@@ -292,12 +332,18 @@
                         gameRunning = false;
                         cancelAnimationFrame(animationFrame);
                         document.getElementById('status').textContent = gameData.error || 
-                            `Crashed at ${parseFloat(gameData.crash_point || 0).toFixed(2)}x! You lost.`;
+                            `Crashed at ${parseFloat(gameData.crash_point || 0).toFixed(2)}x!` + 
+                            (gameRunning ? ' You lost.' : '');
                         document.getElementById('cashoutBtn').disabled = true;
                         document.getElementById('countdown').textContent = 'Waiting for next game...';
+                        // Reset game and start new countdown
+                        await fetch(`api.php?action=reset_game&game_id=${gameId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' }
+                        });
                         fetchUser();
                         fetchHistory();
-                        startCountdown(); // Start new countdown after crash
+                        startCountdown();
                     } else {
                         animationFrame = requestAnimationFrame(updateMultiplier);
                     }

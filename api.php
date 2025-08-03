@@ -10,6 +10,7 @@ $user = 'kasunpre_av'; // Replace with your MySQL username
 $pass = 'Kasun2052'; // Replace with your MySQL password
 
 
+
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -140,9 +141,8 @@ switch ($action) {
                 error_log("get_next_game: game_id={$game['id']}, crash_point={$game['crash_point']}");
                 echo json_encode(['game_id' => $game['id'], 'crash_point' => $game['crash_point']]);
             } else {
-                // Auto-generate a new game if none available
-                $crash_point = round(1 + (mt_rand(10, 1000) / 100), 2); // Random crash point between 1.10 and 10.00
-                $win_rate = round(mt_rand(10, 90), 2); // Random win rate between 10% and 90%
+                $crash_point = round(1 + (mt_rand(10, 1000) / 100), 2);
+                $win_rate = round(mt_rand(10, 90), 2);
                 $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, NULL, TRUE)');
                 $stmt->execute([$crash_point, $win_rate]);
                 $new_game_id = $pdo->lastInsertId();
@@ -163,9 +163,8 @@ switch ($action) {
             }
             $stmt = $pdo->prepare('UPDATE games SET is_active = FALSE WHERE id = ?');
             $stmt->execute([$game_id]);
-            // Auto-generate a new game
-            $crash_point = round(1 + (mt_rand(10, 1000) / 100), 2); // Random crash point between 1.10 and 10.00
-            $win_rate = round(mt_rand(10, 90), 2); // Random win rate between 10% and 90%
+            $crash_point = round(1 + (mt_rand(10, 1000) / 100), 2);
+            $win_rate = round(mt_rand(10, 90), 2);
             $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, NULL, FALSE)');
             $stmt->execute([$crash_point, $win_rate]);
             $new_game_id = $pdo->lastInsertId();
@@ -263,6 +262,19 @@ switch ($action) {
             $stmt->execute([$win_amount, $bet['user_id']]);
             error_log("Cashout successful: bet_id=$bet_id, user_id={$bet['user_id']}, multiplier=$multiplier, win_amount=$win_amount");
             echo json_encode(['message' => 'Cashout successful', 'win_amount' => $win_amount]);
+        }
+        break;
+
+    case 'get_crash_history':
+        if ($method === 'GET') {
+            $stmt = $pdo->prepare('SELECT id, crash_point, created_at FROM games ORDER BY created_at DESC');
+            $stmt->execute();
+            $crashes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($crashes as &$crash) {
+                $crash['crash_point'] = floatval($crash['crash_point']);
+            }
+            error_log("get_crash_history: count=" . count($crashes));
+            echo json_encode($crashes);
         }
         break;
 
