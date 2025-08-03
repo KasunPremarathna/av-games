@@ -69,7 +69,7 @@
             if (user.error) {
                 document.getElementById('userInfo').innerHTML = 'User not found. Please <a href="register.html" class="text-blue-500">register</a>.';
             } else {
-                document.getElementById('userInfo').innerHTML = `User: ${user.username}, Balance: $${user.balance.toFixed(2)} <a href="register.html" class="text-blue-500">Logout</a>`;
+                document.getElementById('userInfo').innerHTML = `User: ${user.username}, Balance: $${user.balance.toFixed(2)} <a href="login.html" class="text-blue-500">Logout</a>`;
                 document.getElementById('balance').textContent = `Current Balance: $${user.balance.toFixed(2)}`;
             }
         }
@@ -94,7 +94,7 @@
 
         async function placeBet() {
             if (!userId) {
-                document.getElementById('status').textContent = 'Please register or login.';
+                document.getElementById('status').textContent = 'Please login.';
                 return;
             }
             const betAmount = parseFloat(document.getElementById('betAmount').value);
@@ -103,11 +103,7 @@
                 return;
             }
 
-            const gameResponse = await fetch('api.php?action=set_crash_point', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ admin_id: 1, crash_point: 0 }) // Admin sets crash point later
-            });
+            const gameResponse = await fetch('api.php?action=get_next_game');
             const gameData = await gameResponse.json();
             if (gameData.error) {
                 document.getElementById('status').textContent = gameData.error;
@@ -152,7 +148,7 @@
 
         async function requestTopup() {
             if (!userId) {
-                document.getElementById('status').textContent = 'Please register or login.';
+                document.getElementById('status').textContent = 'Please login.';
                 return;
             }
             const amount = parseFloat(document.getElementById('topupAmount').value);
@@ -185,7 +181,7 @@
                 chart.data.datasets[0].data.push(multiplier.toFixed(2));
                 chart.update();
 
-                const response = await fetch(`api.php?action=set_crash_point&game_id=${gameId}`);
+                const response = await fetch(`api.php?action=get_next_game&game_id=${gameId}`);
                 const gameData = await response.json();
                 if (gameData.error || multiplier >= gameData.crash_point) {
                     gameRunning = false;

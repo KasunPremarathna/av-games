@@ -20,9 +20,15 @@
             <p id="adminStatus" class="text-red-500 mt-2 text-center"></p>
         </div>
         <div class="bg-white p-6 rounded-lg shadow-md mb-4">
-            <h2 class="text-xl font-bold mb-4">Set Crash Point</h2>
-            <input type="number" id="crashPoint" placeholder="Crash Point (e.g., 2.50)" step="0.01" min="1" class="border p-2 rounded w-full mb-4">
-            <button onclick="setCrashPoint()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Set Crash Point</button>
+            <h2 class="text-xl font-bold mb-4">Set Crash Points</h2>
+            <div id="crashPointsContainer">
+                <div class="crash-point flex gap-2 mb-2">
+                    <input type="number" placeholder="Crash Point (e.g., 2.50)" step="0.01" min="1" class="border p-2 rounded w-1/2">
+                    <input type="number" placeholder="Win Rate (%)" min="0" max="100" class="border p-2 rounded w-1/2">
+                </div>
+            </div>
+            <button onclick="addCrashPointField()" class="bg-gray-500 text-white p-2 rounded w-full mb-2 hover:bg-gray-600">Add Another Crash Point</button>
+            <button onclick="setCrashPoints()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Set Crash Points</button>
         </div>
         <div class="bg-white p-6 rounded-lg shadow-md mb-4">
             <h2 class="text-xl font-bold mb-4">Pending Cashouts</h2>
@@ -62,24 +68,43 @@
             }
         }
 
-        async function setCrashPoint() {
+        function addCrashPointField() {
+            const container = document.getElementById('crashPointsContainer');
+            const div = document.createElement('div');
+            div.className = 'crash-point flex gap-2 mb-2';
+            div.innerHTML = `
+                <input type="number" placeholder="Crash Point (e.g., 2.50)" step="0.01" min="1" class="border p-2 rounded w-1/2">
+                <input type="number" placeholder="Win Rate (%)" min="0" max="100" class="border p-2 rounded w-1/2">
+            `;
+            container.appendChild(div);
+        }
+
+        async function setCrashPoints() {
             if (!adminId) {
                 document.getElementById('adminStatus').textContent = 'Please login first.';
                 return;
             }
-            const crashPoint = parseFloat(document.getElementById('crashPoint').value);
-            if (isNaN(crashPoint) || crashPoint < 1) {
-                document.getElementById('adminStatus').textContent = 'Enter a valid crash point';
+            const crashPoints = [];
+            document.querySelectorAll('.crash-point').forEach(div => {
+                const crashPoint = parseFloat(div.querySelector('input[type="number"]:nth-child(1)').value);
+                const winRate = parseFloat(div.querySelector('input[type="number"]:nth-child(2)').value);
+                if (!isNaN(crashPoint) && crashPoint >= 1 && !isNaN(winRate) && winRate >= 0 && winRate <= 100) {
+                    crashPoints.push({ crash_point: crashPoint, win_rate: winRate });
+                }
+            });
+
+            if (crashPoints.length === 0) {
+                document.getElementById('adminStatus').textContent = 'Add at least one valid crash point and win rate';
                 return;
             }
 
-            const response = await fetch('api.php?action=set_crash_point', {
+            const response = await fetch('api.php?action=set_crash_points', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ admin_id: adminId, crash_point: crashPoint })
+                body: JSON.stringify({ admin_id: adminId, crash_points: crashPoints })
             });
             const data = await response.json();
-            document.getElementById('adminStatus').textContent = data.error || `Crash point set to ${data.crash_point}x for game ${data.game_id}`;
+            document.getElementById('adminStatus').textContent = data.error || 'Crash points set successfully';
         }
 
         async function fetchPendingCashouts() {

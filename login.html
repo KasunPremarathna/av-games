@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Register - Crash Betting Game</title>
+    <title>Login - Crash Betting Game</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: Arial, sans-serif; }
@@ -10,16 +10,16 @@
 </head>
 <body class="bg-gray-100 flex items-center justify-center h-screen">
     <div class="bg-white p-6 rounded-lg shadow-md w-96">
-        <h2 class="text-2xl font-bold mb-4 text-center">Register</h2>
+        <h2 class="text-2xl font-bold mb-4 text-center">Login</h2>
         <input type="text" id="username" placeholder="Username" class="border p-2 mb-4 w-full rounded">
         <input type="password" id="password" placeholder="Password" class="border p-2 mb-4 w-full rounded">
-        <button onclick="registerUser()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Register</button>
+        <button onclick="loginUser()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Login</button>
         <p id="status" class="text-red-500 mt-2 text-center"></p>
-        <p class="mt-4 text-center">Already have an account? <a href="login.html" class="text-blue-500">Login</a></p>
+        <p class="mt-4 text-center">Don't have an account? <a href="register.html" class="text-blue-500">Register</a></p>
     </div>
 
     <script>
-        async function registerUser() {
+        async function loginUser() {
             const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value;
             if (!username || !password) {
@@ -27,7 +27,7 @@
                 return;
             }
 
-            const response = await fetch('api.php?action=register', {
+            const response = await fetch('api.php?action=login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password })
@@ -36,9 +36,9 @@
             if (data.error) {
                 document.getElementById('status').textContent = data.error;
             } else {
-                document.getElementById('status').textContent = 'Registration successful! Redirecting...';
+                document.getElementById('status').textContent = 'Login successful! Redirecting...';
                 localStorage.setItem('userId', data.user_id);
-                setTimeout(() => window.location.href = 'login.html', 2000);
+                setTimeout(() => window.location.href = 'index.html', 2000);
             }
         }
     </script>

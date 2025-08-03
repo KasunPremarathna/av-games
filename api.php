@@ -13,7 +13,8 @@ try {
     $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 } catch (PDOException $e) {
-    echo json_encode(['error' => 'Connection failed: ' . $e->getMessage()]);
+    error_log("Connection failed: " . $e->getMessage());
+    echo json_encode(['error' => 'Connection failed']);
     exit;
 }
 
@@ -25,16 +26,35 @@ switch ($action) {
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
             $username = $data['username'] ?? '';
-            if ($username) {
+            $password = $data['password'] ?? '';
+            if ($username && $password) {
                 try {
-                    $stmt = $pdo->prepare('INSERT INTO users (username) VALUES (?)');
-                    $stmt->execute([$username]);
+                    $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+                    $stmt = $pdo->prepare('INSERT INTO users (username, password) VALUES (?, ?)');
+                    $stmt->execute([$username, $hashedPassword]);
                     echo json_encode(['message' => 'User registered', 'user_id' => $pdo->lastInsertId()]);
                 } catch (PDOException $e) {
+                    error_log("Registration error: " . $e->getMessage());
                     echo json_encode(['error' => 'Username already exists']);
                 }
             } else {
-                echo json_encode(['error' => 'Invalid username']);
+                echo json_encode(['error' => 'Invalid username or password']);
+            }
+        }
+        break;
+
+    case 'login':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $username = $data['username'] ?? '';
+            $password = $data['password'] ?? '';
+            $stmt = $pdo->prepare('SELECT id, password FROM users WHERE username = ?');
+            $stmt->execute([$username]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user && password_verify($password, $user['password'])) {
+                echo json_encode(['message' => 'Login successful', 'user_id' => $user['id']]);
+            } else {
+                echo json_encode(['error' => 'Invalid credentials']);
             }
         }
         break;
@@ -55,18 +75,55 @@ switch ($action) {
         }
         break;
 
-    case 'set_crash_point':
+    case 'set_crash_points':
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
             $admin_id = $data['admin_id'] ?? 0;
-            $crash_point = $data['crash_point'] ?? 0;
-            if ($crash_point < 1 || !$admin_id) {
-                echo json_encode(['error' => 'Invalid crash point or admin ID']);
+            $crash_points = $data['crash_points'] ?? []; // Array of [crash_point, win_rate]
+
+            // Validate admin_id
+            $stmt = $pdo->prepare('SELECT id FROM admins WHERE id = ?');
+            $stmt->execute([$admin_id]);
+            if (!$stmt->fetch()) {
+                error_log("Invalid admin_id: $admin_id");
+                echo json_encode(['error' => 'Invalid admin ID']);
                 exit;
             }
-            $stmt = $pdo->prepare('INSERT INTO games (crash_point, set_by_admin_id) VALUES (?, ?)');
-            $stmt->execute([$crash_point, $admin_id]);
-            echo json_encode(['game_id' => $pdo->lastInsertId(), 'crash_point' => $crash_point]);
+
+            // Validate crash points
+            if (empty($crash_points)) {
+                error_log("No crash points provided");
+                echo json_encode(['error' => 'No crash points provided']);
+                exit;
+            }
+
+            foreach ($crash_points as $point) {
+                $crash_point = $point['crash_point'] ?? 0;
+                $win_rate = $point['win_rate'] ?? 0;
+                if ($crash_point < 1 || $win_rate < 0 || $win_rate > 100) {
+                    error_log("Invalid crash point or win rate: crash_point=$crash_point, win_rate=$win_rate");
+                    echo json_encode(['error' => "Invalid crash point ($crash_point) or win rate ($win_rate)"]);
+                    exit;
+                }
+                $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, ?, FALSE)');
+                $stmt->execute([$crash_point, $win_rate, $admin_id]);
+            }
+            echo json_encode(['message' => 'Crash points set']);
+        }
+        break;
+
+    case 'get_next_game':
+        if ($method === 'GET') {
+            $stmt = $pdo->prepare('SELECT id, crash_point FROM games WHERE is_active = FALSE ORDER BY created_at ASC LIMIT 1');
+            $stmt->execute();
+            $game = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($game) {
+                $stmt = $pdo->prepare('UPDATE games SET is_active = TRUE WHERE id = ?');
+                $stmt->execute([$game['id']]);
+                echo json_encode(['game_id' => $game['id'], 'crash_point' => $game['crash_point']]);
+            } else {
+                echo json_encode(['error' => 'No games available']);
+            }
         }
         break;
 
@@ -93,11 +150,11 @@ switch ($action) {
                 exit;
             }
 
-            $stmt = $pdo->prepare('SELECT id FROM games WHERE id = ?');
+            $stmt = $pdo->prepare('SELECT id FROM games WHERE id = ? AND is_active = TRUE');
             $stmt->execute([$game_id]);
             if (!$stmt->fetch()) {
-                error_log("Invalid game_id: $game_id");
-                echo json_encode(['error' => 'Invalid game ID']);
+                error_log("Invalid or inactive game_id: $game_id");
+                echo json_encode(['error' => 'Invalid or inactive game ID']);
                 exit;
             }
 
@@ -154,6 +211,14 @@ switch ($action) {
             $data = json_decode(file_get_contents('php://input'), true);
             $bet_id = $data['bet_id'] ?? 0;
             $admin_id = $data['admin_id'] ?? 0;
+
+            $stmt = $pdo->prepare('SELECT id FROM admins WHERE id = ?');
+            $stmt->execute([$admin_id]);
+            if (!$stmt->fetch()) {
+                error_log("Invalid admin_id for approve_cashout: $admin_id");
+                echo json_encode(['error' => 'Invalid admin ID']);
+                exit;
+            }
 
             $stmt = $pdo->prepare('SELECT user_id, win_amount FROM bets WHERE id = ? AND cashout_status = ?');
             $stmt->execute([$bet_id, 'pending']);
