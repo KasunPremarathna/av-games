@@ -5,7 +5,7 @@
     <title>Crash Betting Game</title>
     <style>
         body { font-family: Arial, sans-serif; text-align: center; }
-        #gameArea { margin: 20px; }
+        #gameArea, #registerArea { margin: 20px; }
         #multiplier { font-size: 2em; color: green; }
         #history { margin-top: 20px; }
         button, input { margin: 5px; padding: 10px; }
@@ -13,6 +13,11 @@
 </head>
 <body>
     <h1>Crash Betting Game</h1>
+    <div id="registerArea">
+        <h2>Register</h2>
+        <input type="text" id="username" placeholder="Username">
+        <button onclick="registerUser()">Register</button>
+    </div>
     <div id="userInfo"></div>
     <div id="gameArea">
         <h2>Place Bet</h2>
@@ -28,15 +33,45 @@
     </div>
 
     <script>
-        let userId = 1; // For demo, replace with actual user ID after login
+        let userId = null; // Will be set after registration
         let gameId = null;
         let betId = null;
         let multiplier = 1.0;
         let gameRunning = false;
         let animationFrame;
 
+        // Register user
+        async function registerUser() {
+            const username = document.getElementById('username').value.trim();
+            if (!username) {
+                document.getElementById('status').textContent = 'Enter a valid username';
+                return;
+            }
+
+            const response = await fetch('api.php?action=register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username })
+            });
+            const data = await response.json();
+            if (data.error) {
+                document.getElementById('status').textContent = data.error;
+                return;
+            }
+
+            userId = data.user_id;
+            document.getElementById('status').textContent = 'Registration successful!';
+            document.getElementById('registerArea').style.display = 'none'; // Hide registration form
+            fetchUser();
+            fetchHistory();
+        }
+
         // Fetch user info
         async function fetchUser() {
+            if (!userId) {
+                document.getElementById('userInfo').innerHTML = 'Please register to play.';
+                return;
+            }
             const response = await fetch(`api.php?action=get_user&user_id=${userId}`);
             const user = await response.json();
             document.getElementById('userInfo').innerHTML = user.error || 
@@ -45,6 +80,7 @@
 
         // Fetch game history
         async function fetchHistory() {
+            if (!userId) return;
             const response = await fetch(`api.php?action=get_history&user_id=${userId}`);
             const history = await response.json();
             const historyList = document.getElementById('historyList');
@@ -61,18 +97,24 @@
 
         // Place bet
         async function placeBet() {
+            if (!userId) {
+                document.getElementById('status').textContent = 'Please register first.';
+                return;
+            }
             const betAmount = parseFloat(document.getElementById('betAmount').value);
-            if (!betAmount || betAmount <= 0) {
-                alert('Enter a valid bet amount');
+            if (isNaN(betAmount) || betAmount <= 0) {
+                document.getElementById('status').textContent = 'Enter a valid bet amount';
                 return;
             }
 
-            // Start new game
             const gameResponse = await fetch('api.php?action=start_game', { method: 'POST' });
             const gameData = await gameResponse.json();
+            if (gameData.error) {
+                document.getElementById('status').textContent = gameData.error;
+                return;
+            }
             gameId = gameData.game_id;
 
-            // Place bet
             const betResponse = await fetch('api.php?action=place_bet', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -80,14 +122,14 @@
             });
             const betData = await betResponse.json();
             if (betData.error) {
-                alert(betData.error);
+                document.getElementById('status').textContent = betData.error;
                 return;
             }
 
             betId = betData.bet_id;
             gameRunning = true;
             document.getElementById('cashoutBtn').disabled = false;
-            document.getElementById('status').textContent = 'Game started!';
+            document.getElementById('status').textContent = 'Bet placed! Game started!';
             startMultiplier();
         }
 
@@ -117,16 +159,16 @@
             async function updateMultiplier() {
                 if (!gameRunning) return;
                 const elapsed = (Date.now() - startTime) / 1000;
-                multiplier = 1 + elapsed * 0.5; // Increase by 0.5x per second
+                multiplier = 1 + elapsed * 0.5;
                 document.getElementById('multiplier').textContent = `Multiplier: ${multiplier.toFixed(2)}x`;
 
-                // Check if game crashed
                 const response = await fetch(`api.php?action=start_game&game_id=${gameId}`);
                 const gameData = await response.json();
-                if (multiplier >= gameData.crash_point) {
+                if (gameData.error || multiplier >= gameData.crash_point) {
                     gameRunning = false;
                     cancelAnimationFrame(animationFrame);
-                    document.getElementById('status').textContent = `Crashed at ${gameData.crash_point}x! You lost.`;
+                    document.getElementById('status').textContent = gameData.error || 
+                        `Crashed at ${gameData.crash_point}x! You lost.`;
                     document.getElementById('cashoutBtn').disabled = true;
                     fetchUser();
                     fetchHistory();
@@ -139,7 +181,6 @@
 
         // Initialize
         fetchUser();
-        fetchHistory();
     </script>
 </body>
 </html>
