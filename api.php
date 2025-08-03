@@ -9,6 +9,7 @@ $db = 'kasunpre_av';
 $user = 'kasunpre_av'; // Replace with your MySQL username
 $pass = 'Kasun2052'; // Replace with your MySQL password
 
+
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -32,12 +33,14 @@ switch ($action) {
                     $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
                     $stmt = $pdo->prepare('INSERT INTO users (username, password, balance) VALUES (?, ?, 1000.00)');
                     $stmt->execute([$username, $hashedPassword]);
+                    error_log("User registered: username=$username, user_id=" . $pdo->lastInsertId());
                     echo json_encode(['message' => 'User registered', 'user_id' => $pdo->lastInsertId()]);
                 } catch (PDOException $e) {
                     error_log("Registration error: " . $e->getMessage());
                     echo json_encode(['error' => 'Username already exists']);
                 }
             } else {
+                error_log("Invalid registration input: username=$username");
                 echo json_encode(['error' => 'Invalid username or password']);
             }
         }
@@ -52,8 +55,10 @@ switch ($action) {
             $stmt->execute([$username]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
             if ($user && password_verify($password, $user['password'])) {
+                error_log("Login successful: username=$username, user_id={$user['id']}");
                 echo json_encode(['message' => 'Login successful', 'user_id' => $user['id']]);
             } else {
+                error_log("Login failed: username=$username");
                 echo json_encode(['error' => 'Invalid credentials']);
             }
         }
@@ -68,8 +73,10 @@ switch ($action) {
             $stmt->execute([$username]);
             $admin = $stmt->fetch(PDO::FETCH_ASSOC);
             if ($admin && password_verify($password, $admin['password'])) {
+                error_log("Admin login successful: username=$username, admin_id={$admin['id']}");
                 echo json_encode(['message' => 'Admin logged in', 'admin_id' => $admin['id']]);
             } else {
+                error_log("Admin login failed: username=$username");
                 echo json_encode(['error' => 'Invalid credentials']);
             }
         }
@@ -108,6 +115,7 @@ switch ($action) {
                 $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, ?, FALSE)');
                 $stmt->execute([$crash_point, $win_rate, $admin_id]);
             }
+            error_log("Crash points set by admin_id=$admin_id");
             echo json_encode(['message' => 'Crash points set']);
         }
         break;
@@ -128,8 +136,11 @@ switch ($action) {
                     $stmt = $pdo->prepare('UPDATE games SET is_active = TRUE WHERE id = ?');
                     $stmt->execute([$game['id']]);
                 }
-                echo json_encode(['game_id' => $game['id'], 'crash_point' => floatval($game['crash_point'])]);
+                $game['crash_point'] = floatval($game['crash_point']);
+                error_log("get_next_game: game_id={$game['id']}, crash_point={$game['crash_point']}");
+                echo json_encode(['game_id' => $game['id'], 'crash_point' => $game['crash_point']]);
             } else {
+                error_log("get_next_game: No games available");
                 echo json_encode(['error' => 'No games available']);
             }
         }
@@ -172,6 +183,7 @@ switch ($action) {
 
             $stmt = $pdo->prepare('INSERT INTO bets (user_id, game_id, bet_amount) VALUES (?, ?, ?)');
             $stmt->execute([$user_id, $game_id, $bet_amount]);
+            error_log("Bet placed: user_id=$user_id, game_id=$game_id, bet_amount=$bet_amount");
             echo json_encode(['message' => 'Bet placed', 'bet_id' => $pdo->lastInsertId()]);
         }
         break;
@@ -218,6 +230,7 @@ switch ($action) {
             $win_amount = floatval($bet['bet_amount']) * $multiplier;
             $stmt = $pdo->prepare('UPDATE bets SET cashout_multiplier = ?, win_amount = ?, cashout_status = ? WHERE id = ?');
             $stmt->execute([$multiplier, $win_amount, 'pending', $bet_id]);
+            error_log("Cashout submitted: bet_id=$bet_id, multiplier=$multiplier, win_amount=$win_amount");
             echo json_encode(['message' => 'Cashout request submitted']);
         }
         break;
@@ -240,6 +253,7 @@ switch ($action) {
             $stmt->execute([$bet_id, 'pending']);
             $bet = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$bet) {
+                error_log("Invalid or already processed bet: bet_id=$bet_id");
                 echo json_encode(['error' => 'Invalid or already processed bet']);
                 exit;
             }
@@ -249,6 +263,7 @@ switch ($action) {
 
             $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
             $stmt->execute([floatval($bet['win_amount']), $bet['user_id']]);
+            error_log("Cashout approved: bet_id=$bet_id, user_id={$bet['user_id']}, win_amount={$bet['win_amount']}");
             echo json_encode(['message' => 'Cashout approved']);
         }
         break;
@@ -260,8 +275,10 @@ switch ($action) {
             $stmt = $pdo->prepare('UPDATE bets SET cashout_status = ? WHERE id = ? AND cashout_status = ?');
             $stmt->execute(['rejected', $bet_id, 'pending']);
             if ($stmt->rowCount() > 0) {
+                error_log("Cashout rejected: bet_id=$bet_id");
                 echo json_encode(['message' => 'Cashout rejected']);
             } else {
+                error_log("Invalid or already processed bet for reject_cashout: bet_id=$bet_id");
                 echo json_encode(['error' => 'Invalid or already processed bet']);
             }
         }
@@ -273,11 +290,13 @@ switch ($action) {
             $user_id = $data['user_id'] ?? 0;
             $amount = floatval($data['amount'] ?? 0);
             if ($amount <= 0 || !$user_id) {
+                error_log("Invalid topup request: user_id=$user_id, amount=$amount");
                 echo json_encode(['error' => 'Invalid amount or user ID']);
                 exit;
             }
             $stmt = $pdo->prepare('INSERT INTO topup_requests (user_id, amount) VALUES (?, ?)');
             $stmt->execute([$user_id, $amount]);
+            error_log("Topup request submitted: user_id=$user_id, amount=$amount");
             echo json_encode(['message' => 'Top-up request submitted']);
         }
         break;
@@ -290,6 +309,7 @@ switch ($action) {
             $stmt->execute([$request_id, 'pending']);
             $request = $stmt->fetch(PDO::FETCH_ASSOC);
             if (!$request) {
+                error_log("Invalid or already processed topup request: request_id=$request_id");
                 echo json_encode(['error' => 'Invalid or already processed request']);
                 exit;
             }
@@ -299,6 +319,7 @@ switch ($action) {
 
             $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
             $stmt->execute([floatval($request['amount']), $request['user_id']]);
+            error_log("Topup approved: request_id=$request_id, user_id={$request['user_id']}, amount={$request['amount']}");
             echo json_encode(['message' => 'Top-up approved']);
         }
         break;
@@ -310,8 +331,10 @@ switch ($action) {
             $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ? AND status = ?');
             $stmt->execute(['rejected', $request_id, 'pending']);
             if ($stmt->rowCount() > 0) {
+                error_log("Topup rejected: request_id=$request_id");
                 echo json_encode(['message' => 'Top-up rejected']);
             } else {
+                error_log("Invalid or already processed topup request: request_id=$request_id");
                 echo json_encode(['error' => 'Invalid or already processed request']);
             }
         }
@@ -332,7 +355,7 @@ switch ($action) {
                 $user = $stmt->fetch(PDO::FETCH_ASSOC);
                 if ($user) {
                     $user['balance'] = floatval($user['balance']); // Ensure balance is a float
-                    error_log("get_user success: user_id=$user_id, username={$user['username']}, balance={$user['balance']}");
+                    error_log("get_user success: user_id=$user_id, username={$user['username']}, balance={$user['balance']}, type=" . gettype($user['balance']));
                     echo json_encode($user);
                 } else {
                     error_log("User not found: user_id=$user_id");
@@ -353,10 +376,11 @@ switch ($action) {
             $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
             foreach ($history as &$bet) {
                 $bet['bet_amount'] = floatval($bet['bet_amount']);
-                $bet['cashout_multiplier'] = floatval($bet['cashout_multiplier']);
-                $bet['win_amount'] = floatval($bet['win_amount']);
+                $bet['cashout_multiplier'] = floatval($bet['cashout_multiplier'] ?? 0);
+                $bet['win_amount'] = floatval($bet['win_amount'] ?? 0);
                 $bet['crash_point'] = floatval($bet['crash_point']);
             }
+            error_log("get_history: user_id=$user_id, history_count=" . count($history));
             echo json_encode($history);
         }
         break;
@@ -367,9 +391,10 @@ switch ($action) {
             $cashouts = $stmt->fetchAll(PDO::FETCH_ASSOC);
             foreach ($cashouts as &$cashout) {
                 $cashout['bet_amount'] = floatval($cashout['bet_amount']);
-                $cashout['cashout_multiplier'] = floatval($cashout['cashout_multiplier']);
-                $cashout['win_amount'] = floatval($cashout['win_amount']);
+                $cashout['cashout_multiplier'] = floatval($cashout['cashout_multiplier'] ?? 0);
+                $cashout['win_amount'] = floatval($cashout['win_amount'] ?? 0);
             }
+            error_log("get_pending_cashouts: count=" . count($cashouts));
             echo json_encode($cashouts);
         }
         break;
@@ -381,6 +406,7 @@ switch ($action) {
             foreach ($requests as &$request) {
                 $request['amount'] = floatval($request['amount']);
             }
+            error_log("get_pending_topups: count=" . count($requests));
             echo json_encode($requests);
         }
         break;

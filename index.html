@@ -94,8 +94,17 @@
                     return false;
                 }
 
-                // Ensure balance is a number
-                const userBalance = parseFloat(user.balance) || 0;
+                // Robustly handle balance
+                console.log('Raw balance value:', user.balance, 'Type:', typeof user.balance);
+                const userBalance = typeof user.balance === 'string' ? parseFloat(user.balance.replace(/[^0-9.-]+/g, '')) : parseFloat(user.balance);
+                if (isNaN(userBalance)) {
+                    console.error('Invalid balance value:', user.balance);
+                    userInfo.innerHTML = `User: ${user.username}, Balance: Error <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
+                    balance.textContent = 'Balance: Invalid balance';
+                    status.textContent = 'Error: Invalid balance data';
+                    return false;
+                }
+
                 userInfo.innerHTML = `User: ${user.username}, Balance: $${userBalance.toFixed(2)} <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
                 balance.textContent = `Current Balance: $${userBalance.toFixed(2)}`;
                 return true;
@@ -129,12 +138,12 @@
                 historyList.innerHTML = '';
                 history.forEach(bet => {
                     const li = document.createElement('li');
-                    li.textContent = `Game ${bet.game_id}: Bet $${parseFloat(bet.bet_amount).toFixed(2)}, ` +
+                    li.textContent = `Game ${bet.game_id}: Bet $${parseFloat(bet.bet_amount || 0).toFixed(2)}, ` +
                         (bet.cashout_status === 'approved' ? 
                             `Cashed out at ${parseFloat(bet.cashout_multiplier || 0).toFixed(2)}x, Won $${parseFloat(bet.win_amount || 0).toFixed(2)}` :
                             bet.cashout_status === 'pending' ? 
                             `Pending cashout at ${parseFloat(bet.cashout_multiplier || 0).toFixed(2)}x` :
-                            `Crashed at ${parseFloat(bet.crash_point).toFixed(2)}x, ${bet.cashout_status === 'rejected' ? 'Cashout rejected' : 'Lost'}`);
+                            `Crashed at ${parseFloat(bet.crash_point || 0).toFixed(2)}x, ${bet.cashout_status === 'rejected' ? 'Cashout rejected' : 'Lost'}`);
                     historyList.appendChild(li);
                 });
             } catch (error) {
@@ -259,11 +268,11 @@
                     const response = await fetch(`api.php?action=get_next_game&game_id=${gameId}`);
                     const gameData = await response.json();
                     console.log('updateMultiplier game response:', gameData);
-                    if (gameData.error || multiplier >= gameData.crash_point) {
+                    if (gameData.error || multiplier >= parseFloat(gameData.crash_point || 0)) {
                         gameRunning = false;
                         cancelAnimationFrame(animationFrame);
                         document.getElementById('status').textContent = gameData.error || 
-                            `Crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x! You lost.`;
+                            `Crashed at ${parseFloat(gameData.crash_point || 0).toFixed(2)}x! You lost.`;
                         document.getElementById('cashoutBtn').disabled = true;
                         fetchUser();
                         fetchHistory();
