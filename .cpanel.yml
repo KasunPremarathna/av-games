@@ -1,0 +1,4 @@
+---
+deployment:
+  tasks:
+    - /bin/cp -rf * /home/kasunpre/you.kasunpremarathna.com/
