@@ -6,9 +6,8 @@ header('Access-Control-Allow-Headers: Content-Type');
 
 $host = 'localhost';
 $db = 'kasunpre_av';
-$user = 'kasunpre_av'; // Replace with your MySQL username
-$pass = 'Kasun2052'; // Replace with your MySQL password
-
+$user = 'kasunpre_av';
+$pass = 'Kasun2052';
 
 // Configurable betting phase duration (in seconds)
 const BETTING_DURATION = 10;
@@ -348,37 +347,54 @@ switch ($action) {
             error_log("cashout input: bet_id=$bet_id, multiplier=$multiplier, game_id=$game_id");
 
             try {
-                if ($multiplier <= 0) {
-                    error_log("Invalid multiplier: $multiplier");
+                if ($bet_id <= 0 || $game_id <= 0) {
+                    error_log("Invalid input: bet_id=$bet_id, game_id=$game_id");
                     http_response_code(400);
-                    echo json_encode(['error' => 'Invalid multiplier']);
+                    echo json_encode(['error' => 'Invalid bet or game ID']);
                     exit;
                 }
 
-                $stmt = $pdo->prepare('SELECT crash_point, phase FROM games WHERE id = ?');
+                // Fetch game state
+                $stmt = $pdo->prepare('SELECT crash_point, phase, start_time FROM games WHERE id = ? AND is_active = TRUE');
                 $stmt->execute([$game_id]);
                 $game = $stmt->fetch(PDO::FETCH_ASSOC);
                 if (!$game || $game['phase'] !== 'running') {
                     error_log("Game not found or not running: game_id=$game_id, phase=" . ($game['phase'] ?? 'none'));
-                    http_response_code(404);
-                    echo json_encode(['error' => 'Game not found or not running']);
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Game not found or not in running phase']);
                     exit;
                 }
+
+                // Calculate server-side multiplier
+                $elapsed = time() - strtotime($game['start_time']);
+                $server_multiplier = round(1 + ($elapsed * 0.5), 2);
                 $crash_point = floatval($game['crash_point']);
-                if ($multiplier > $crash_point) {
-                    error_log("Multiplier exceeds crash point: multiplier=$multiplier, crash_point=$crash_point");
+                if ($server_multiplier >= $crash_point) {
+                    error_log("Game crashed: game_id=$game_id, server_multiplier=$server_multiplier, crash_point=$crash_point");
+                    $stmt = $pdo->prepare('UPDATE games SET phase = ?, is_active = FALSE WHERE id = ?');
+                    $stmt->execute(['crashed', $game_id]);
                     http_response_code(400);
                     echo json_encode(['error' => 'Game crashed']);
                     exit;
                 }
 
-                $stmt = $pdo->prepare('SELECT user_id, bet_amount FROM bets WHERE id = ?');
-                $stmt->execute([$bet_id]);
+                // Use server multiplier if client multiplier is invalid
+                $final_multiplier = $multiplier > 0 && $multiplier <= $crash_point ? $multiplier : $server_multiplier;
+                if ($final_multiplier <= 0 || $final_multiplier > $crash_point) {
+                    error_log("Invalid multiplier: client_multiplier=$multiplier, server_multiplier=$server_multiplier, crash_point=$crash_point");
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Invalid multiplier']);
+                    exit;
+                }
+
+                // Validate bet
+                $stmt = $pdo->prepare('SELECT user_id, bet_amount FROM bets WHERE id = ? AND game_id = ? AND cashout_status IS NULL');
+                $stmt->execute([$bet_id, $game_id]);
                 $bet = $stmt->fetch(PDO::FETCH_ASSOC);
                 if (!$bet) {
-                    error_log("Bet not found: bet_id=$bet_id");
-                    http_response_code(404);
-                    echo json_encode(['error' => 'Invalid bet']);
+                    error_log("Bet not found or already cashed out: bet_id=$bet_id, game_id=$game_id");
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Invalid bet or already cashed out']);
                     exit;
                 }
 
@@ -386,14 +402,15 @@ switch ($action) {
                 $stmt->execute([$bet['user_id']]);
                 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-                $win_amount = floatval($bet['bet_amount']) * $multiplier;
+                // Process cashout
+                $win_amount = floatval($bet['bet_amount']) * $final_multiplier;
                 $stmt = $pdo->prepare('UPDATE bets SET cashout_multiplier = ?, win_amount = ?, cashout_status = ? WHERE id = ?');
-                $stmt->execute([$multiplier, $win_amount, 'approved', $bet_id]);
+                $stmt->execute([$final_multiplier, $win_amount, 'approved', $bet_id]);
 
                 $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
                 $stmt->execute([$win_amount, $bet['user_id']]);
-                error_log("Cashout successful: bet_id=$bet_id, user_id={$bet['user_id']}, multiplier=$multiplier, win_amount=$win_amount");
-                echo json_encode(['message' => 'Cashout successful', 'win_amount' => $win_amount]);
+                error_log("Cashout successful: bet_id=$bet_id, user_id={$bet['user_id']}, final_multiplier=$final_multiplier, win_amount=$win_amount, server_multiplier=$server_multiplier");
+                echo json_encode(['message' => 'Cashout successful', 'win_amount' => $win_amount, 'multiplier' => $final_multiplier]);
             } catch (PDOException $e) {
                 error_log("cashout PDO error: " . $e->getMessage());
                 http_response_code(500);
