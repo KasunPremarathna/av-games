@@ -11,14 +11,21 @@ $pass = 'Kasun2052'; // Replace with your MySQL password
 
 
 
-
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    error_log("Database connection successful");
 } catch (PDOException $e) {
     error_log("Connection failed: " . $e->getMessage());
-    echo json_encode(['error' => 'Connection failed']);
+    http_response_code(500);
+    echo json_encode(['error' => 'Database connection failed']);
     exit;
+}
+
+function notifyWebSocket($game_id, $type, $data) {
+    // In production, use Redis or direct WebSocket message
+    file_put_contents('websocket_trigger.txt', json_encode(['game_id' => $game_id, 'type' => $type, 'data' => $data]) . "\n", FILE_APPEND);
+    error_log("Notified WebSocket: game_id=$game_id, type=$type");
 }
 
 function generateCrashPoint() {
@@ -52,10 +59,12 @@ switch ($action) {
                     echo json_encode(['message' => 'User registered', 'user_id' => $pdo->lastInsertId()]);
                 } catch (PDOException $e) {
                     error_log("Registration error: " . $e->getMessage());
+                    http_response_code(400);
                     echo json_encode(['error' => 'Username already exists']);
                 }
             } else {
                 error_log("Invalid registration input: username=$username");
+                http_response_code(400);
                 echo json_encode(['error' => 'Invalid username or password']);
             }
         }
@@ -66,15 +75,22 @@ switch ($action) {
             $data = json_decode(file_get_contents('php://input'), true);
             $username = $data['username'] ?? '';
             $password = $data['password'] ?? '';
-            $stmt = $pdo->prepare('SELECT id, password FROM users WHERE username = ?');
-            $stmt->execute([$username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user && password_verify($password, $user['password'])) {
-                error_log("Login successful: username=$username, user_id={$user['id']}");
-                echo json_encode(['message' => 'Login successful', 'user_id' => $user['id']]);
-            } else {
-                error_log("Login failed: username=$username");
-                echo json_encode(['error' => 'Invalid credentials']);
+            try {
+                $stmt = $pdo->prepare('SELECT id, password FROM users WHERE username = ?');
+                $stmt->execute([$username]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($user && password_verify($password, $user['password'])) {
+                    error_log("Login successful: username=$username, user_id={$user['id']}");
+                    echo json_encode(['message' => 'Login successful', 'user_id' => $user['id']]);
+                } else {
+                    error_log("Login failed: username=$username");
+                    http_response_code(401);
+                    echo json_encode(['error' => 'Invalid credentials']);
+                }
+            } catch (PDOException $e) {
+                error_log("Login PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
             }
         }
         break;
@@ -84,15 +100,22 @@ switch ($action) {
             $data = json_decode(file_get_contents('php://input'), true);
             $username = $data['username'] ?? '';
             $password = $data['password'] ?? '';
-            $stmt = $pdo->prepare('SELECT id, password FROM admins WHERE username = ?');
-            $stmt->execute([$username]);
-            $admin = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($admin && password_verify($password, $admin['password'])) {
-                error_log("Admin login successful: username=$username, admin_id={$admin['id']}");
-                echo json_encode(['message' => 'Admin logged in', 'admin_id' => $admin['id']]);
-            } else {
-                error_log("Admin login failed: username=$username");
-                echo json_encode(['error' => 'Invalid credentials']);
+            try {
+                $stmt = $pdo->prepare('SELECT id, password FROM admins WHERE username = ?');
+                $stmt->execute([$username]);
+                $admin = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($admin && password_verify($password, $admin['password'])) {
+                    error_log("Admin login successful: username=$username, admin_id={$admin['id']}");
+                    echo json_encode(['message' => 'Admin logged in', 'admin_id' => $admin['id']]);
+                } else {
+                    error_log("Admin login failed: username=$username");
+                    http_response_code(401);
+                    echo json_encode(['error' => 'Invalid credentials']);
+                }
+            } catch (PDOException $e) {
+                error_log("Admin login PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
             }
         }
         break;
@@ -105,63 +128,80 @@ switch ($action) {
 
             error_log("set_crash_points input: admin_id=$admin_id, crash_points=" . json_encode($crash_points));
 
-            $stmt = $pdo->prepare('SELECT id FROM admins WHERE id = ?');
-            $stmt->execute([$admin_id]);
-            if (!$stmt->fetch()) {
-                error_log("Invalid admin_id: $admin_id");
-                echo json_encode(['error' => 'Invalid admin ID']);
-                exit;
-            }
-
-            if (empty($crash_points)) {
-                error_log("No crash points provided");
-                echo json_encode(['error' => 'No crash points provided']);
-                exit;
-            }
-
-            foreach ($crash_points as $point) {
-                $crash_point = floatval($point['crash_point'] ?? 0);
-                $win_rate = floatval($point['win_rate'] ?? 0);
-                if ($crash_point < 1 || $win_rate < 0 || $win_rate > 100) {
-                    error_log("Invalid crash point or win rate: crash_point=$crash_point, win_rate=$win_rate");
-                    echo json_encode(['error' => "Invalid crash point ($crash_point) or win rate ($win_rate)"]);
+            try {
+                $stmt = $pdo->prepare('SELECT id FROM admins WHERE id = ?');
+                $stmt->execute([$admin_id]);
+                if (!$stmt->fetch()) {
+                    error_log("Invalid admin_id: $admin_id");
+                    http_response_code(401);
+                    echo json_encode(['error' => 'Invalid admin ID']);
                     exit;
                 }
-                $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, ?, FALSE)');
-                $stmt->execute([$crash_point, $win_rate, $admin_id]);
+
+                if (empty($crash_points)) {
+                    error_log("No crash points provided");
+                    http_response_code(400);
+                    echo json_encode(['error' => 'No crash points provided']);
+                    exit;
+                }
+
+                foreach ($crash_points as $point) {
+                    $crash_point = floatval($point['crash_point'] ?? 0);
+                    $win_rate = floatval($point['win_rate'] ?? 0);
+                    if ($crash_point < 1 || $win_rate < 0 || $win_rate > 100) {
+                        error_log("Invalid crash point or win rate: crash_point=$crash_point, win_rate=$win_rate");
+                        http_response_code(400);
+                        echo json_encode(['error' => "Invalid crash point ($crash_point) or win rate ($win_rate)"]);
+                        exit;
+                    }
+                    $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, ?, FALSE)');
+                    $stmt->execute([$crash_point, $win_rate, $admin_id]);
+                }
+                error_log("Crash points set by admin_id=$admin_id");
+                echo json_encode(['message' => 'Crash points set']);
+            } catch (PDOException $e) {
+                error_log("set_crash_points PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+                exit;
             }
-            error_log("Crash points set by admin_id=$admin_id");
-            echo json_encode(['message' => 'Crash points set']);
         }
         break;
 
     case 'get_next_game':
         if ($method === 'GET') {
-            $game_id = $_GET['game_id'] ?? null;
-            if ($game_id) {
-                $stmt = $pdo->prepare('SELECT id, crash_point FROM games WHERE id = ? AND is_active = TRUE');
-                $stmt->execute([$game_id]);
-            } else {
-                $stmt = $pdo->prepare('SELECT id, crash_point FROM games WHERE is_active = FALSE ORDER BY created_at ASC LIMIT 1');
-                $stmt->execute();
-            }
-            $game = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($game) {
-                if (!$game_id) {
-                    $stmt = $pdo->prepare('UPDATE games SET is_active = TRUE WHERE id = ?');
-                    $stmt->execute([$game['id']]);
+            try {
+                $game_id = $_GET['game_id'] ?? null;
+                if ($game_id) {
+                    $stmt = $pdo->prepare('SELECT id, crash_point FROM games WHERE id = ? AND is_active = TRUE');
+                    $stmt->execute([$game_id]);
+                } else {
+                    $stmt = $pdo->prepare('SELECT id, crash_point FROM games WHERE is_active = FALSE ORDER BY created_at ASC LIMIT 1');
+                    $stmt->execute();
                 }
-                $game['crash_point'] = floatval($game['crash_point']);
-                error_log("get_next_game: game_id={$game['id']}, crash_point={$game['crash_point']}");
-                echo json_encode(['game_id' => $game['id'], 'crash_point' => $game['crash_point']]);
-            } else {
-                $crash_point = generateCrashPoint();
-                $win_rate = round(mt_rand(10, 90), 2);
-                $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, NULL, TRUE)');
-                $stmt->execute([$crash_point, $win_rate]);
-                $new_game_id = $pdo->lastInsertId();
-                error_log("get_next_game: No games available, created new game_id=$new_game_id, crash_point=$crash_point");
-                echo json_encode(['game_id' => $new_game_id, 'crash_point' => $crash_point]);
+                $game = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($game) {
+                    if (!$game_id) {
+                        $stmt = $pdo->prepare('UPDATE games SET is_active = TRUE WHERE id = ?');
+                        $stmt->execute([$game['id']]);
+                    }
+                    $game['crash_point'] = floatval($game['crash_point']);
+                    error_log("get_next_game: game_id={$game['id']}, crash_point={$game['crash_point']}");
+                    echo json_encode(['game_id' => $game['id'], 'crash_point' => $game['crash_point']]);
+                } else {
+                    $crash_point = generateCrashPoint();
+                    $win_rate = round(mt_rand(10, 90), 2);
+                    $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, NULL, TRUE)');
+                    $stmt->execute([$crash_point, $win_rate]);
+                    $new_game_id = $pdo->lastInsertId();
+                    error_log("get_next_game: No games available, created new game_id=$new_game_id, crash_point=$crash_point");
+                    echo json_encode(['game_id' => $new_game_id, 'crash_point' => $crash_point]);
+                }
+            } catch (PDOException $e) {
+                error_log("get_next_game PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+                exit;
             }
         }
         break;
@@ -172,18 +212,27 @@ switch ($action) {
             $game_id = $data['game_id'] ?? 0;
             if ($game_id <= 0) {
                 error_log("Invalid game_id for reset_game: $game_id");
+                http_response_code(400);
                 echo json_encode(['error' => 'Invalid game ID']);
                 exit;
             }
-            $stmt = $pdo->prepare('UPDATE games SET is_active = FALSE WHERE id = ?');
-            $stmt->execute([$game_id]);
-            $crash_point = generateCrashPoint();
-            $win_rate = round(mt_rand(10, 90), 2);
-            $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, NULL, FALSE)');
-            $stmt->execute([$crash_point, $win_rate]);
-            $new_game_id = $pdo->lastInsertId();
-            error_log("Game reset: game_id=$game_id, new game created: game_id=$new_game_id, crash_point=$crash_point");
-            echo json_encode(['message' => 'Game reset, new game created']);
+            try {
+                $stmt = $pdo->prepare('UPDATE games SET is_active = FALSE WHERE id = ?');
+                $stmt->execute([$game_id]);
+                $crash_point = generateCrashPoint();
+                $win_rate = round(mt_rand(10, 90), 2);
+                $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, NULL, FALSE)');
+                $stmt->execute([$crash_point, $win_rate]);
+                $new_game_id = $pdo->lastInsertId();
+                error_log("Game reset: game_id=$game_id, new game created: game_id=$new_game_id, crash_point=$crash_point");
+                notifyWebSocket($game_id, 'game_reset', ['new_game_id' => $new_game_id]);
+                echo json_encode(['message' => 'Game reset, new game created']);
+            } catch (PDOException $e) {
+                error_log("reset_game PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+                exit;
+            }
         }
         break;
 
@@ -196,36 +245,52 @@ switch ($action) {
 
             error_log("place_bet input: " . print_r($data, true));
 
-            $stmt = $pdo->prepare('SELECT balance FROM users WHERE id = ?');
-            $stmt->execute([$user_id]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$user) {
-                error_log("User not found: user_id=$user_id");
-                echo json_encode(['error' => 'User not found']);
+            try {
+                $stmt = $pdo->prepare('SELECT balance FROM users WHERE id = ?');
+                $stmt->execute([$user_id]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$user) {
+                    error_log("User not found: user_id=$user_id");
+                    http_response_code(404);
+                    echo json_encode(['error' => 'User not found']);
+                    exit;
+                }
+                $balance = floatval($user['balance']);
+                if ($balance < $bet_amount || $bet_amount <= 0) {
+                    error_log("Invalid balance or input: balance=$balance, bet_amount=$bet_amount");
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Insufficient balance or invalid input']);
+                    exit;
+                }
+
+                $stmt = $pdo->prepare('SELECT id FROM games WHERE id = ? AND is_active = TRUE');
+                $stmt->execute([$game_id]);
+                if (!$stmt->fetch()) {
+                    error_log("Invalid or inactive game_id: $game_id");
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Invalid or inactive game ID']);
+                    exit;
+                }
+
+                $stmt = $pdo->prepare('UPDATE users SET balance = balance - ? WHERE id = ?');
+                $stmt->execute([$bet_amount, $user_id]);
+
+                $stmt = $pdo->prepare('SELECT username FROM users WHERE id = ?');
+                $stmt->execute([$user_id]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                $stmt = $pdo->prepare('INSERT INTO bets (user_id, game_id, bet_amount) VALUES (?, ?, ?)');
+                $stmt->execute([$user_id, $game_id, $bet_amount]);
+                $bet_id = $pdo->lastInsertId();
+                error_log("Bet placed: user_id=$user_id, game_id=$game_id, bet_amount=$bet_amount");
+                notifyWebSocket($game_id, 'new_bet', ['username' => $user['username'], 'bet_amount' => $bet_amount]);
+                echo json_encode(['message' => 'Bet placed', 'bet_id' => $bet_id]);
+            } catch (PDOException $e) {
+                error_log("place_bet PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
                 exit;
             }
-            $balance = floatval($user['balance']);
-            if ($balance < $bet_amount || $bet_amount <= 0) {
-                error_log("Invalid balance or input: balance=$balance, bet_amount=$bet_amount");
-                echo json_encode(['error' => 'Insufficient balance or invalid input']);
-                exit;
-            }
-
-            $stmt = $pdo->prepare('SELECT id FROM games WHERE id = ? AND is_active = TRUE');
-            $stmt->execute([$game_id]);
-            if (!$stmt->fetch()) {
-                error_log("Invalid or inactive game_id: $game_id");
-                echo json_encode(['error' => 'Invalid or inactive game ID']);
-                exit;
-            }
-
-            $stmt = $pdo->prepare('UPDATE users SET balance = balance - ? WHERE id = ?');
-            $stmt->execute([$bet_amount, $user_id]);
-
-            $stmt = $pdo->prepare('INSERT INTO bets (user_id, game_id, bet_amount) VALUES (?, ?, ?)');
-            $stmt->execute([$user_id, $game_id, $bet_amount]);
-            error_log("Bet placed: user_id=$user_id, game_id=$game_id, bet_amount=$bet_amount");
-            echo json_encode(['message' => 'Bet placed', 'bet_id' => $pdo->lastInsertId()]);
         }
         break;
 
@@ -238,168 +303,256 @@ switch ($action) {
 
             error_log("cashout input: " . print_r($data, true));
 
-            if ($multiplier <= 0) {
-                error_log("Invalid multiplier: $multiplier");
-                echo json_encode(['error' => 'Invalid multiplier']);
+            try {
+                if ($multiplier <= 0) {
+                    error_log("Invalid multiplier: $multiplier");
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Invalid multiplier']);
+                    exit;
+                }
+
+                $stmt = $pdo->prepare('SELECT crash_point FROM games WHERE id = ?');
+                $stmt->execute([$game_id]);
+                $game = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$game) {
+                    error_log("Game not found: game_id=$game_id");
+                    http_response_code(404);
+                    echo json_encode(['error' => 'Game not found']);
+                    exit;
+                }
+                $crash_point = floatval($game['crash_point']);
+                if ($multiplier > $crash_point) {
+                    error_log("Multiplier exceeds crash point: multiplier=$multiplier, crash_point=$crash_point");
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Game crashed']);
+                    exit;
+                }
+
+                $stmt = $pdo->prepare('SELECT user_id, bet_amount FROM bets WHERE id = ?');
+                $stmt->execute([$bet_id]);
+                $bet = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$bet) {
+                    error_log("Bet not found: bet_id=$bet_id");
+                    http_response_code(404);
+                    echo json_encode(['error' => 'Invalid bet']);
+                    exit;
+                }
+
+                $stmt = $pdo->prepare('SELECT username FROM users WHERE id = ?');
+                $stmt->execute([$bet['user_id']]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                $win_amount = floatval($bet['bet_amount']) * $multiplier;
+                $stmt = $pdo->prepare('UPDATE bets SET cashout_multiplier = ?, win_amount = ?, cashout_status = ? WHERE id = ?');
+                $stmt->execute([$multiplier, $win_amount, 'approved', $bet_id]);
+
+                $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
+                $stmt->execute([$win_amount, $bet['user_id']]);
+                error_log("Cashout successful: bet_id=$bet_id, user_id={$bet['user_id']}, multiplier=$multiplier, win_amount=$win_amount");
+                notifyWebSocket($game_id, 'cashout', ['username' => $user['username'], 'multiplier' => $multiplier, 'win_amount' => $win_amount]);
+                echo json_encode(['message' => 'Cashout successful', 'win_amount' => $win_amount]);
+            } catch (PDOException $e) {
+                error_log("cashout PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
                 exit;
             }
-
-            $stmt = $pdo->prepare('SELECT crash_point FROM games WHERE id = ?');
-            $stmt->execute([$game_id]);
-            $game = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$game) {
-                error_log("Game not found: game_id=$game_id");
-                echo json_encode(['error' => 'Game not found']);
-                exit;
-            }
-            $crash_point = floatval($game['crash_point']);
-            if ($multiplier > $crash_point) {
-                error_log("Multiplier exceeds crash point: multiplier=$multiplier, crash_point=$crash_point");
-                echo json_encode(['error' => 'Game crashed']);
-                exit;
-            }
-
-            $stmt = $pdo->prepare('SELECT user_id, bet_amount FROM bets WHERE id = ?');
-            $stmt->execute([$bet_id]);
-            $bet = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$bet) {
-                error_log("Bet not found: bet_id=$bet_id");
-                echo json_encode(['error' => 'Invalid bet']);
-                exit;
-            }
-
-            $win_amount = floatval($bet['bet_amount']) * $multiplier;
-            $stmt = $pdo->prepare('UPDATE bets SET cashout_multiplier = ?, win_amount = ?, cashout_status = ? WHERE id = ?');
-            $stmt->execute([$multiplier, $win_amount, 'approved', $bet_id]);
-
-            $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
-            $stmt->execute([$win_amount, $bet['user_id']]);
-            error_log("Cashout successful: bet_id=$bet_id, user_id={$bet['user_id']}, multiplier=$multiplier, win_amount=$win_amount");
-            echo json_encode(['message' => 'Cashout successful', 'win_amount' => $win_amount]);
         }
         break;
 
     case 'get_active_bets':
         if ($method === 'GET') {
-            $game_id = $_GET['game_id'] ?? 0;
-            $stmt = $pdo->prepare('SELECT b.bet_amount, u.username FROM bets b JOIN users u ON b.user_id = u.id WHERE b.game_id = ? AND b.cashout_status IS NULL');
-            $stmt->execute([$game_id]);
-            $bets = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($bets as &$bet) {
-                $bet['bet_amount'] = floatval($bet['bet_amount']);
+            try {
+                $game_id = $_GET['game_id'] ?? 0;
+                $stmt = $pdo->prepare('SELECT b.bet_amount, u.username FROM bets b JOIN users u ON b.user_id = u.id WHERE b.game_id = ? AND b.cashout_status IS NULL');
+                $stmt->execute([$game_id]);
+                $bets = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($bets as &$bet) {
+                    $bet['bet_amount'] = floatval($bet['bet_amount']);
+                }
+                error_log("get_active_bets: game_id=$game_id, count=" . count($bets));
+                echo json_encode($bets);
+            } catch (PDOException $e) {
+                error_log("get_active_bets PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+                exit;
             }
-            error_log("get_active_bets: game_id=$game_id, count=" . count($bets));
-            echo json_encode($bets);
         }
         break;
 
     case 'request_transaction':
         if ($method === 'POST') {
-            $data = json_decode(file_get_contents('php://input'), true);
-            $user_id = $data['user_id'] ?? 0;
-            $amount = floatval($data['amount'] ?? 0);
-            $type = $data['type'] ?? 'topup';
-
-            error_log("request_transaction input: user_id=$user_id, amount=$amount, type=$type");
-
-            if ($amount <= 0 || !$user_id) {
-                error_log("Invalid transaction request: user_id=$user_id, amount=$amount, type=$type");
-                echo json_encode(['error' => 'Invalid amount or user ID']);
-                exit;
-            }
-
-            if ($type === 'withdraw') {
-                $stmt = $pdo->prepare('SELECT balance FROM users WHERE id = ?');
-                $stmt->execute([$user_id]);
-                $user = $stmt->fetch(PDO::FETCH_ASSOC);
-                if (!$user || floatval($user['balance']) < $amount) {
-                    error_log("Insufficient balance for withdraw: user_id=$user_id, balance=" . ($user['balance'] ?? 'N/A') . ", amount=$amount");
-                    echo json_encode(['error' => 'Insufficient balance']);
+            try {
+                $raw_input = file_get_contents('php://input');
+                error_log("request_transaction raw input: " . $raw_input);
+                $data = json_decode($raw_input, true);
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    error_log("request_transaction JSON parse error: " . json_last_error_msg());
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Invalid JSON input: ' . json_last_error_msg()]);
                     exit;
                 }
-            }
 
-            $stmt = $pdo->prepare('INSERT INTO topup_requests (user_id, amount, type) VALUES (?, ?, ?)');
-            $stmt->execute([$user_id, $amount, $type]);
-            error_log("Transaction request submitted: user_id=$user_id, amount=$amount, type=$type");
-            echo json_encode(['message' => ucfirst($type) . ' request submitted']);
+                $user_id = $data['user_id'] ?? 0;
+                $amount = floatval($data['amount'] ?? 0);
+                $type = $data['type'] ?? 'topup';
+
+                error_log("request_transaction input: user_id=$user_id, amount=$amount, type=$type");
+
+                if ($amount <= 0 || !$user_id) {
+                    error_log("Invalid transaction request: user_id=$user_id, amount=$amount, type=$type");
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Invalid amount or user ID']);
+                    exit;
+                }
+
+                $stmt = $pdo->prepare('SELECT id, balance FROM users WHERE id = ?');
+                $stmt->execute([$user_id]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$user) {
+                    error_log("User not found: user_id=$user_id");
+                    http_response_code(404);
+                    echo json_encode(['error' => 'User not found']);
+                    exit;
+                }
+
+                if ($type === 'withdraw') {
+                    $balance = floatval($user['balance']);
+                    error_log("Withdraw balance check: user_id=$user_id, balance=$balance, requested_amount=$amount");
+                    if ($balance < $amount) {
+                        error_log("Insufficient balance for withdraw: user_id=$user_id, balance=$balance, amount=$amount");
+                        http_response_code(400);
+                        echo json_encode(['error' => 'Insufficient balance']);
+                        exit;
+                    }
+                }
+
+                $stmt = $pdo->prepare('INSERT INTO topup_requests (user_id, amount, type, status) VALUES (?, ?, ?, ?)');
+                $stmt->execute([$user_id, $amount, $type, 'pending']);
+                $request_id = $pdo->lastInsertId();
+                error_log("Transaction request submitted: user_id=$user_id, amount=$amount, type=$type, request_id=$request_id");
+                echo json_encode(['message' => ucfirst($type) . ' request submitted', 'request_id' => $request_id]);
+            } catch (PDOException $e) {
+                error_log("request_transaction PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
+                exit;
+            } catch (Exception $e) {
+                error_log("request_transaction error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Server error: ' . $e->getMessage()]);
+                exit;
+            }
         }
         break;
 
     case 'get_pending_transactions':
         if ($method === 'GET') {
-            $stmt = $pdo->query('SELECT t.id, t.user_id, t.amount, t.type, u.username FROM topup_requests t JOIN users u ON t.user_id = u.id WHERE t.status = "pending"');
-            $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($requests as &$request) {
-                $request['amount'] = floatval($request['amount']);
+            try {
+                $stmt = $pdo->prepare('SELECT t.id, t.user_id, t.amount, t.type, u.username FROM topup_requests t JOIN users u ON t.user_id = u.id WHERE t.status = ?');
+                $stmt->execute(['pending']);
+                $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($requests as &$request) {
+                    $request['amount'] = floatval($request['amount']);
+                }
+                error_log("get_pending_transactions: count=" . count($requests));
+                echo json_encode($requests);
+            } catch (PDOException $e) {
+                error_log("get_pending_transactions PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+                exit;
             }
-            error_log("get_pending_transactions: count=" . count($requests));
-            echo json_encode($requests);
         }
         break;
 
     case 'approve_transaction':
         if ($method === 'POST') {
-            $data = json_decode(file_get_contents('php://input'), true);
-            $request_id = $data['request_id'] ?? 0;
-            $stmt = $pdo->prepare('SELECT user_id, amount, type FROM topup_requests WHERE id = ? AND status = ?');
-            $stmt->execute([$request_id, 'pending']);
-            $request = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$request) {
-                error_log("Invalid or already processed transaction request: request_id=$request_id");
-                echo json_encode(['error' => 'Invalid or already processed request']);
-                exit;
-            }
-
-            if ($request['type'] === 'withdraw') {
-                $stmt = $pdo->prepare('SELECT balance FROM users WHERE id = ?');
-                $stmt->execute([$request['user_id']]);
-                $user = $stmt->fetch(PDO::FETCH_ASSOC);
-                if (!$user || floatval($user['balance']) < floatval($request['amount'])) {
-                    error_log("Insufficient balance for withdraw approval: user_id={$request['user_id']}, balance=" . ($user['balance'] ?? 'N/A') . ", amount={$request['amount']}");
-                    echo json_encode(['error' => 'Insufficient balance']);
+            try {
+                $data = json_decode(file_get_contents('php://input'), true);
+                $request_id = $data['request_id'] ?? 0;
+                $stmt = $pdo->prepare('SELECT user_id, amount, type FROM topup_requests WHERE id = ? AND status = ?');
+                $stmt->execute([$request_id, 'pending']);
+                $request = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$request) {
+                    error_log("Invalid or already processed transaction request: request_id=$request_id");
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Invalid or already processed request']);
                     exit;
                 }
-                $stmt = $pdo->prepare('UPDATE users SET balance = balance - ? WHERE id = ?');
-                $stmt->execute([floatval($request['amount']), $request['user_id']]);
-            } elseif ($request['type'] === 'topup') {
-                $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
-                $stmt->execute([floatval($request['amount']), $request['user_id']]);
-            }
 
-            $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ?');
-            $stmt->execute(['approved', $request_id]);
-            error_log("Transaction approved: request_id=$request_id, user_id={$request['user_id']}, amount={$request['amount']}, type={$request['type']}");
-            echo json_encode(['message' => ucfirst($request['type']) . ' approved']);
+                if ($request['type'] === 'withdraw') {
+                    $stmt = $pdo->prepare('SELECT balance FROM users WHERE id = ?');
+                    $stmt->execute([$request['user_id']]);
+                    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if (!$user || floatval($user['balance']) < floatval($request['amount'])) {
+                        error_log("Insufficient balance for withdraw approval: user_id={$request['user_id']}, balance=" . ($user['balance'] ?? 'N/A') . ", amount={$request['amount']}");
+                        http_response_code(400);
+                        echo json_encode(['error' => 'Insufficient balance']);
+                        exit;
+                    }
+                    $stmt = $pdo->prepare('UPDATE users SET balance = balance - ? WHERE id = ?');
+                    $stmt->execute([floatval($request['amount']), $request['user_id']]);
+                } elseif ($request['type'] === 'topup') {
+                    $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
+                    $stmt->execute([floatval($request['amount']), $request['user_id']]);
+                }
+
+                $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ?');
+                $stmt->execute(['approved', $request_id]);
+                error_log("Transaction approved: request_id=$request_id, user_id={$request['user_id']}, amount={$request['amount']}, type={$request['type']}");
+                echo json_encode(['message' => ucfirst($request['type']) . ' approved']);
+            } catch (PDOException $e) {
+                error_log("approve_transaction PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+                exit;
+            }
         }
         break;
 
     case 'reject_transaction':
         if ($method === 'POST') {
-            $data = json_decode(file_get_contents('php://input'), true);
-            $request_id = $data['request_id'] ?? 0;
-            $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ? AND status = ?');
-            $stmt->execute(['rejected', $request_id, 'pending']);
-            if ($stmt->rowCount() > 0) {
-                error_log("Transaction rejected: request_id=$request_id");
-                echo json_encode(['message' => 'Transaction rejected']);
-            } else {
-                error_log("Invalid or already processed transaction request: request_id=$request_id");
-                echo json_encode(['error' => 'Invalid or already processed request']);
+            try {
+                $data = json_decode(file_get_contents('php://input'), true);
+                $request_id = $data['request_id'] ?? 0;
+                $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ? AND status = ?');
+                $stmt->execute(['rejected', $request_id, 'pending']);
+                if ($stmt->rowCount() > 0) {
+                    error_log("Transaction rejected: request_id=$request_id");
+                    echo json_encode(['message' => 'Transaction rejected']);
+                } else {
+                    error_log("Invalid or already processed transaction request: request_id=$request_id");
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Invalid or already processed request']);
+                }
+            } catch (PDOException $e) {
+                error_log("reject_transaction PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+                exit;
             }
         }
         break;
 
     case 'get_crash_history':
         if ($method === 'GET') {
-            $stmt = $pdo->prepare('SELECT id, crash_point, created_at FROM games ORDER BY created_at DESC');
-            $stmt->execute();
-            $crashes = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($crashes as &$crash) {
-                $crash['crash_point'] = floatval($crash['crash_point']);
+            try {
+                $stmt = $pdo->prepare('SELECT id, crash_point, created_at FROM games ORDER BY created_at DESC');
+                $stmt->execute();
+                $crashes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($crashes as &$crash) {
+                    $crash['crash_point'] = floatval($crash['crash_point']);
+                }
+                error_log("get_crash_history: count=" . count($crashes));
+                echo json_encode($crashes);
+            } catch (PDOException $e) {
+                error_log("get_crash_history PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+                exit;
             }
-            error_log("get_crash_history: count=" . count($crashes));
-            echo json_encode($crashes);
         }
         break;
 
@@ -409,6 +562,7 @@ switch ($action) {
             error_log("get_user input: user_id=$user_id");
             if ($user_id <= 0) {
                 error_log("Invalid user_id: $user_id");
+                http_response_code(400);
                 echo json_encode(['error' => 'Invalid user ID']);
                 exit;
             }
@@ -422,30 +576,53 @@ switch ($action) {
                     echo json_encode($user);
                 } else {
                     error_log("User not found: user_id=$user_id");
+                    http_response_code(404);
                     echo json_encode(['error' => 'User not found']);
                 }
             } catch (PDOException $e) {
-                error_log("get_user error: " . $e->getMessage());
+                error_log("get_user PDO error: " . $e->getMessage());
+                http_response_code(500);
                 echo json_encode(['error' => 'Database error']);
+                exit;
             }
         }
         break;
 
     case 'get_history':
         if ($method === 'GET') {
-            $user_id = $_GET['user_id'] ?? 0;
-            $stmt = $pdo->prepare('SELECT b.*, g.crash_point FROM bets b JOIN games g ON b.game_id = g.id WHERE b.user_id = ? ORDER BY b.created_at DESC');
-            $stmt->execute([$user_id]);
-            $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($history as &$bet) {
-                $bet['bet_amount'] = floatval($bet['bet_amount']);
-                $bet['cashout_multiplier'] = floatval($bet['cashout_multiplier'] ?? 0);
-                $bet['win_amount'] = floatval($bet['win_amount'] ?? 0);
-                $bet['crash_point'] = floatval($bet['crash_point']);
+            try {
+                $user_id = $_GET['user_id'] ?? 0;
+                $stmt = $pdo->prepare('SELECT b.*, g.crash_point FROM bets b JOIN games g ON b.game_id = g.id WHERE b.user_id = ? ORDER BY b.created_at DESC');
+                $stmt->execute([$user_id]);
+                $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($history as &$bet) {
+                    $bet['bet_amount'] = floatval($bet['bet_amount']);
+                    $bet['cashout_multiplier'] = floatval($bet['cashout_multiplier'] ?? 0);
+                    $bet['win_amount'] = floatval($bet['win_amount'] ?? 0);
+                    $bet['crash_point'] = floatval($bet['crash_point']);
+                }
+                error_log("get_history: user_id=$user_id, history_count=" . count($history));
+                echo json_encode($history);
+            } catch (PDOException $e) {
+                error_log("get_history PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+                exit;
             }
-            error_log("get_history: user_id=$user_id, history_count=" . count($history));
-            echo json_encode($history);
         }
+        break;
+
+    case 'debug':
+        if ($method === 'GET') {
+            error_log("Debug endpoint called");
+            echo json_encode(['status' => 'OK', 'timestamp' => date('Y-m-d H:i:s'), 'php_version' => phpversion(), 'pdo_enabled' => extension_loaded('pdo_mysql')]);
+        }
+        break;
+
+    default:
+        error_log("Invalid action: $action");
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid action']);
         break;
 }
 ?>

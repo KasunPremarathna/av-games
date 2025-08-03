@@ -49,6 +49,7 @@
         let countdownInterval = null;
         let animationFrame = null;
         let countdownTime = 20;
+        let ws = null;
 
         const ctx = document.getElementById('multiplierChart').getContext('2d');
         const chart = new Chart(ctx, {
@@ -64,6 +65,67 @@
             },
             options: { scales: { y: { beginAtZero: true } } }
         });
+
+        function connectWebSocket() {
+            ws = new WebSocket('ws://localhost:8080');
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                if (gameId) {
+                    ws.send(JSON.stringify({ type: 'subscribe_game', game_id: gameId }));
+                }
+            };
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                console.log('WebSocket message:', data);
+                if (data.type === 'active_bets') {
+                    updateActiveBets(data.bets);
+                } else if (data.type === 'new_bet') {
+                    const activeBetsList = document.getElementById('activeBets');
+                    const li = document.createElement('li');
+                    li.textContent = `${data.data.username}: $${parseFloat(data.data.bet_amount).toFixed(2)}`;
+                    activeBetsList.appendChild(li);
+                } else if (data.type === 'cashout') {
+                    updateActiveBetsFromDB(); // Refresh active bets after cashout
+                    document.getElementById('status').textContent = `${data.data.username} cashed out at ${parseFloat(data.data.multiplier).toFixed(2)}x!`;
+                } else if (data.type === 'game_reset') {
+                    gameId = data.data.new_game_id;
+                    ws.send(JSON.stringify({ type: 'subscribe_game', game_id: gameId }));
+                    updateActiveBetsFromDB();
+                }
+            };
+            ws.onclose = () => {
+                console.log('WebSocket disconnected, reconnecting...');
+                setTimeout(connectWebSocket, 1000);
+            };
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function updateActiveBets(bets) {
+            const activeBetsList = document.getElementById('activeBets');
+            activeBetsList.innerHTML = '';
+            if (Array.isArray(bets)) {
+                bets.forEach(bet => {
+                    const li = document.createElement('li');
+                    li.textContent = `${bet.username}: $${parseFloat(bet.bet_amount || 0).toFixed(2)}`;
+                    activeBetsList.appendChild(li);
+                });
+            }
+        }
+
+        async function updateActiveBetsFromDB() {
+            if (!gameId) return;
+            try {
+                const response = await fetch(`api.php?action=get_active_bets&game_id=${gameId}`);
+                const bets = await response.json();
+                console.log('updateActiveBetsFromDB response:', bets);
+                updateActiveBets(bets);
+            } catch (error) {
+                console.error('updateActiveBetsFromDB error:', error);
+                document.getElementById('status').textContent = 'Error fetching active bets';
+            }
+        }
 
         async function fetchUser() {
             const userInfo = document.getElementById('userInfo');
@@ -129,6 +191,7 @@
             document.getElementById('status').textContent = 'Logged out successfully.';
             document.getElementById('historyList').innerHTML = '';
             document.getElementById('activeBets').innerHTML = '';
+            if (ws) ws.close();
             window.location.href = 'login.html';
         }
 
@@ -193,27 +256,6 @@
             }
         }
 
-        async function fetchActiveBets() {
-            if (!gameId) return;
-            try {
-                const response = await fetch(`api.php?action=get_active_bets&game_id=${gameId}`);
-                const bets = await response.json();
-                console.log('fetchActiveBets response:', bets);
-                const activeBetsList = document.getElementById('activeBets');
-                activeBetsList.innerHTML = '';
-                if (Array.isArray(bets)) {
-                    bets.forEach(bet => {
-                        const li = document.createElement('li');
-                        li.textContent = `${bet.username}: $${parseFloat(bet.bet_amount || 0).toFixed(2)}`;
-                        activeBetsList.appendChild(li);
-                    });
-                }
-            } catch (error) {
-                console.error('fetchActiveBets error:', error);
-                document.getElementById('status').textContent = 'Error fetching active bets';
-            }
-        }
-
         async function startCountdown() {
             try {
                 const gameResponse = await fetch('api.php?action=get_next_game');
@@ -224,7 +266,7 @@
                     return;
                 }
                 gameId = gameData.game_id;
-                fetchActiveBets();
+                if (ws) ws.send(JSON.stringify({ type: 'subscribe_game', game_id: gameId }));
             } catch (error) {
                 console.error('startCountdown error:', error);
                 document.getElementById('status').textContent = 'Error starting game: ' + error.message;
@@ -243,7 +285,6 @@
             countdownInterval = setInterval(() => {
                 countdownTime--;
                 document.getElementById('countdown').textContent = `Betting open: ${countdownTime}s`;
-                fetchActiveBets();
                 if (countdownTime <= 0) {
                     clearInterval(countdownInterval);
                     document.getElementById('countdown').textContent = 'Game in progress...';
@@ -281,7 +322,6 @@
                 gameRunning = true;
                 document.getElementById('cashoutBtn').disabled = false;
                 document.getElementById('status').textContent = 'Bet placed! Waiting for game to start...';
-                fetchActiveBets();
             } catch (error) {
                 console.error('placeBet error:', error);
                 document.getElementById('status').textContent = 'Error placing bet: ' + error.message;
@@ -312,7 +352,6 @@
                 document.getElementById('countdown').textContent = 'Waiting for next game...';
                 fetchUser();
                 fetchHistory();
-                fetchActiveBets();
                 startCountdown();
             } catch (error) {
                 console.error('cashout error:', error);
@@ -368,7 +407,7 @@
                     body: JSON.stringify({ user_id: userId, amount, type: 'withdraw' })
                 });
                 const responseText = await response.text();
-                console.log('requestWithdraw raw response:', responseText);
+                console.log('requestWithdraw raw response:', responseText, 'HTTP Status:', response.status);
                 const data = JSON.parse(responseText);
                 document.getElementById('status').textContent = data.error || 'Withdraw request submitted.';
                 document.getElementById('withdrawAmount').value = '';
@@ -409,7 +448,6 @@
                         });
                         fetchUser();
                         fetchHistory();
-                        fetchActiveBets();
                         startCountdown();
                     } else {
                         animationFrame = requestAnimationFrame(updateMultiplier);
@@ -425,6 +463,7 @@
         // Initialize
         fetchUser().then(() => {
             fetchHistory();
+            connectWebSocket();
             startCountdown();
         });
     </script>
