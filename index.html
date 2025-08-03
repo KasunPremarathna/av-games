@@ -332,16 +332,19 @@
             }
 
             try {
+                console.log('Sending top-up request:', { user_id: userId, amount, type: 'topup' });
                 const response = await fetch('api.php?action=request_transaction', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user_id: userId, amount, type: 'topup' })
                 });
-                const data = await response.json();
+                const responseText = await response.text();
+                console.log('requestTopup raw response:', responseText);
+                const data = JSON.parse(responseText);
                 document.getElementById('status').textContent = data.error || 'Top-up request submitted.';
                 document.getElementById('topupAmount').value = '';
             } catch (error) {
-                console.error('requestTopup error:', error);
+                console.error('requestTopup error:', error.message);
                 document.getElementById('status').textContent = 'Error submitting top-up request: ' + error.message;
             }
         }
@@ -358,16 +361,19 @@
             }
 
             try {
+                console.log('Sending withdraw request:', { user_id: userId, amount, type: 'withdraw' });
                 const response = await fetch('api.php?action=request_transaction', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user_id: userId, amount, type: 'withdraw' })
                 });
-                const data = await response.json();
+                const responseText = await response.text();
+                console.log('requestWithdraw raw response:', responseText);
+                const data = JSON.parse(responseText);
                 document.getElementById('status').textContent = data.error || 'Withdraw request submitted.';
                 document.getElementById('withdrawAmount').value = '';
             } catch (error) {
-                console.error('requestWithdraw error:', error);
+                console.error('requestWithdraw error:', error.message);
                 document.getElementById('status').textContent = 'Error submitting withdraw request: ' + error.message;
             }
         }
