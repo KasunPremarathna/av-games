@@ -10,7 +10,7 @@ $user = 'kasunpre_av';
 $pass = 'Kasun2052';
 
 // Configurable betting phase duration (in seconds)
-const BETTING_DURATION = 10;
+const BETTING_DURATION = 30;
 
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
