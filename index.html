@@ -23,12 +23,16 @@
                 <div id="multiplier" class="text-2xl font-bold text-green-600 mt-4">Multiplier: 1.00x</div>
                 <div id="status" class="text-red-500 mt-2"></div>
                 <canvas id="multiplierChart" class="mt-4"></canvas>
+                <h3 class="text-lg font-bold mt-4">Active Bets</h3>
+                <ul id="activeBets" class="list-disc pl-5"></ul>
             </div>
             <div class="bg-white p-6 rounded-lg shadow-md md:w-1/2">
                 <h2 class="text-xl font-bold mb-4">User Panel</h2>
                 <p id="balance" class="mb-4"></p>
                 <input type="number" id="topupAmount" placeholder="Top-up Amount" min="1" class="border p-2 rounded w-full mb-4">
                 <button onclick="requestTopup()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Request Top-up</button>
+                <input type="number" id="withdrawAmount" placeholder="Withdraw Amount" min="1" class="border p-2 rounded w-full mb-4 mt-4">
+                <button onclick="requestWithdraw()" class="bg-yellow-500 text-white p-2 rounded w-full hover:bg-yellow-600">Request Withdraw</button>
                 <h3 class="text-lg font-bold mt-4">Game History</h3>
                 <ul id="historyList" class="list-disc pl-5"></ul>
             </div>
@@ -44,7 +48,7 @@
         let gameRunning = false;
         let countdownInterval = null;
         let animationFrame = null;
-        let countdownTime = 20; // 20 seconds countdown
+        let countdownTime = 20;
 
         const ctx = document.getElementById('multiplierChart').getContext('2d');
         const chart = new Chart(ctx, {
@@ -124,6 +128,7 @@
             document.getElementById('balance').textContent = 'Balance: Not logged in';
             document.getElementById('status').textContent = 'Logged out successfully.';
             document.getElementById('historyList').innerHTML = '';
+            document.getElementById('activeBets').innerHTML = '';
             window.location.href = 'login.html';
         }
 
@@ -131,17 +136,14 @@
             const historyList = document.getElementById('historyList');
             historyList.innerHTML = '';
             try {
-                // Fetch user betting history
                 const betResponse = await fetch(`api.php?action=get_history&user_id=${userId}`);
                 const bets = await betResponse.json();
                 console.log('fetchHistory bets response:', bets);
 
-                // Fetch crash history
                 const crashResponse = await fetch('api.php?action=get_crash_history');
                 const crashes = await crashResponse.json();
                 console.log('fetchHistory crashes response:', crashes);
 
-                // Combine and sort by creation time (assuming bets and games have created_at)
                 const combinedHistory = [];
                 if (Array.isArray(bets)) {
                     bets.forEach(bet => {
@@ -152,7 +154,8 @@
                             text: `Game ${bet.game_id}: Bet $${parseFloat(bet.bet_amount || 0).toFixed(2)}, ` +
                                 (bet.cashout_status === 'approved' ?
                                     `Cashed out at ${parseFloat(bet.cashout_multiplier || 0).toFixed(2)}x, Won $${parseFloat(bet.win_amount || 0).toFixed(2)}` :
-                                    `Crashed at ${parseFloat(bet.crash_point || 0).toFixed(2)}x, Lost`)
+                                    `Crashed at ${parseFloat(bet.crash_point || 0).toFixed(2)}x, Lost`),
+                            crash_point: parseFloat(bet.crash_point || 0)
                         });
                     });
                 }
@@ -162,17 +165,25 @@
                             type: 'crash',
                             game_id: crash.id,
                             created_at: crash.created_at,
-                            text: `Game ${crash.id}: Crashed at ${parseFloat(crash.crash_point || 0).toFixed(2)}x`
+                            text: `Game ${crash.id}: Crashed at ${parseFloat(crash.crash_point || 0).toFixed(2)}x`,
+                            crash_point: parseFloat(crash.crash_point || 0)
                         });
                     });
                 }
 
-                // Sort by created_at (descending)
                 combinedHistory.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-                // Display combined history
                 combinedHistory.forEach(item => {
                     const li = document.createElement('li');
+                    let colorClass = '';
+                    if (item.type === 'crash' || item.type === 'bet') {
+                        const cp = item.crash_point;
+                        if (cp >= 1 && cp <= 2) colorClass = 'text-red-500';
+                        else if (cp > 2 && cp <= 3) colorClass = 'text-pink-500';
+                        else if (cp > 3 && cp <= 5) colorClass = 'text-blue-500';
+                        else if (cp > 5) colorClass = 'text-green-500';
+                    }
+                    li.className = colorClass;
                     li.textContent = item.text;
                     historyList.appendChild(li);
                 });
@@ -182,8 +193,28 @@
             }
         }
 
+        async function fetchActiveBets() {
+            if (!gameId) return;
+            try {
+                const response = await fetch(`api.php?action=get_active_bets&game_id=${gameId}`);
+                const bets = await response.json();
+                console.log('fetchActiveBets response:', bets);
+                const activeBetsList = document.getElementById('activeBets');
+                activeBetsList.innerHTML = '';
+                if (Array.isArray(bets)) {
+                    bets.forEach(bet => {
+                        const li = document.createElement('li');
+                        li.textContent = `${bet.username}: $${parseFloat(bet.bet_amount || 0).toFixed(2)}`;
+                        activeBetsList.appendChild(li);
+                    });
+                }
+            } catch (error) {
+                console.error('fetchActiveBets error:', error);
+                document.getElementById('status').textContent = 'Error fetching active bets';
+            }
+        }
+
         async function startCountdown() {
-            // Fetch a new game
             try {
                 const gameResponse = await fetch('api.php?action=get_next_game');
                 const gameData = await gameResponse.json();
@@ -193,6 +224,7 @@
                     return;
                 }
                 gameId = gameData.game_id;
+                fetchActiveBets();
             } catch (error) {
                 console.error('startCountdown error:', error);
                 document.getElementById('status').textContent = 'Error starting game: ' + error.message;
@@ -211,6 +243,7 @@
             countdownInterval = setInterval(() => {
                 countdownTime--;
                 document.getElementById('countdown').textContent = `Betting open: ${countdownTime}s`;
+                fetchActiveBets();
                 if (countdownTime <= 0) {
                     clearInterval(countdownInterval);
                     document.getElementById('countdown').textContent = 'Game in progress...';
@@ -248,6 +281,7 @@
                 gameRunning = true;
                 document.getElementById('cashoutBtn').disabled = false;
                 document.getElementById('status').textContent = 'Bet placed! Waiting for game to start...';
+                fetchActiveBets();
             } catch (error) {
                 console.error('placeBet error:', error);
                 document.getElementById('status').textContent = 'Error placing bet: ' + error.message;
@@ -278,6 +312,7 @@
                 document.getElementById('countdown').textContent = 'Waiting for next game...';
                 fetchUser();
                 fetchHistory();
+                fetchActiveBets();
                 startCountdown();
             } catch (error) {
                 console.error('cashout error:', error);
@@ -297,10 +332,10 @@
             }
 
             try {
-                const response = await fetch('api.php?action=topup_request', {
+                const response = await fetch('api.php?action=request_transaction', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_id: userId, amount })
+                    body: JSON.stringify({ user_id: userId, amount, type: 'topup' })
                 });
                 const data = await response.json();
                 document.getElementById('status').textContent = data.error || 'Top-up request submitted.';
@@ -308,6 +343,32 @@
             } catch (error) {
                 console.error('requestTopup error:', error);
                 document.getElementById('status').textContent = 'Error submitting top-up request: ' + error.message;
+            }
+        }
+
+        async function requestWithdraw() {
+            if (!userId || !await fetchUser()) {
+                document.getElementById('status').textContent = 'Please login.';
+                return;
+            }
+            const amount = parseFloat(document.getElementById('withdrawAmount').value);
+            if (isNaN(amount) || amount <= 0) {
+                document.getElementById('status').textContent = 'Enter a valid withdraw amount';
+                return;
+            }
+
+            try {
+                const response = await fetch('api.php?action=request_transaction', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId, amount, type: 'withdraw' })
+                });
+                const data = await response.json();
+                document.getElementById('status').textContent = data.error || 'Withdraw request submitted.';
+                document.getElementById('withdrawAmount').value = '';
+            } catch (error) {
+                console.error('requestWithdraw error:', error);
+                document.getElementById('status').textContent = 'Error submitting withdraw request: ' + error.message;
             }
         }
 
@@ -336,13 +397,13 @@
                             (gameRunning ? ' You lost.' : '');
                         document.getElementById('cashoutBtn').disabled = true;
                         document.getElementById('countdown').textContent = 'Waiting for next game...';
-                        // Reset game and start new countdown
                         await fetch(`api.php?action=reset_game&game_id=${gameId}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' }
                         });
                         fetchUser();
                         fetchHistory();
+                        fetchActiveBets();
                         startCountdown();
                     } else {
                         animationFrame = requestAnimationFrame(updateMultiplier);

@@ -2,188 +2,166 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Admin Panel - Crash Betting Game</title>
+    <title>Admin Panel</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body { font-family: Arial, sans-serif; }
-    </style>
 </head>
 <body class="bg-gray-100">
     <div class="container mx-auto p-4">
         <h1 class="text-3xl font-bold text-center mb-4">Admin Panel</h1>
         <div id="adminInfo" class="mb-4"></div>
         <div class="bg-white p-6 rounded-lg shadow-md mb-4">
-            <h2 class="text-xl font-bold mb-4">Admin Login</h2>
-            <input type="text" id="adminUsername" placeholder="Username" class="border p-2 rounded w-full mb-4">
-            <input type="password" id="adminPassword" placeholder="Password" class="border p-2 rounded w-full mb-4">
-            <button onclick="adminLogin()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Login</button>
-            <p id="adminStatus" class="text-red-500 mt-2 text-center"></p>
-        </div>
-        <div class="bg-white p-6 rounded-lg shadow-md mb-4">
             <h2 class="text-xl font-bold mb-4">Set Crash Points</h2>
-            <div id="crashPointsContainer">
-                <div class="crash-point flex gap-2 mb-2">
-                    <input type="number" placeholder="Crash Point (e.g., 2.50)" step="0.01" min="1" class="border p-2 rounded w-1/2">
-                    <input type="number" placeholder="Win Rate (%)" min="0" max="100" class="border p-2 rounded w-1/2">
+            <div id="crashPoints">
+                <div class="flex gap-2 mb-2">
+                    <input type="number" step="0.01" placeholder="Crash Point (e.g., 2.50)" class="border p-2 rounded w-full">
+                    <input type="number" step="0.01" placeholder="Win Rate (%)" class="border p-2 rounded w-full">
+                    <button onclick="removeCrashPoint(this)" class="bg-red-500 text-white p-2 rounded hover:bg-red-600">Remove</button>
                 </div>
             </div>
-            <button onclick="addCrashPointField()" class="bg-gray-500 text-white p-2 rounded w-full mb-2 hover:bg-gray-600">Add Another Crash Point</button>
-            <button onclick="setCrashPoints()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Set Crash Points</button>
-        </div>
-        <div class="bg-white p-6 rounded-lg shadow-md mb-4">
-            <h2 class="text-xl font-bold mb-4">Pending Cashouts</h2>
-            <ul id="cashoutList" class="list-disc pl-5"></ul>
+            <button onclick="addCrashPoint()" class="bg-blue-500 text-white p-2 rounded hover:bg-blue-600">Add Crash Point</button>
+            <button onclick="submitCrashPoints()" class="bg-green-500 text-white p-2 rounded mt-2 hover:bg-green-600">Submit Crash Points</button>
         </div>
         <div class="bg-white p-6 rounded-lg shadow-md">
-            <h2 class="text-xl font-bold mb-4">Pending Top-up Requests</h2>
-            <ul id="topupList" class="list-disc pl-5"></ul>
+            <h2 class="text-xl font-bold mb-4">Pending Transactions</h2>
+            <ul id="pendingList" class="list-disc pl-5"></ul>
         </div>
     </div>
 
     <script>
-        let adminId = null;
+        let adminId = localStorage.getItem('adminId');
 
-        async function adminLogin() {
-            const username = document.getElementById('adminUsername').value.trim();
-            const password = document.getElementById('adminPassword').value;
-            if (!username || !password) {
-                document.getElementById('adminStatus').textContent = 'Enter valid credentials';
-                return;
+        async function checkAdmin() {
+            if (!adminId) {
+                document.getElementById('adminInfo').innerHTML = 'Please <a href="admin_login.html" class="text-blue-500">login</a>.';
+                return false;
             }
-
-            const response = await fetch('api.php?action=admin_login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password })
-            });
-            const data = await response.json();
-            if (data.error) {
-                document.getElementById('adminStatus').textContent = data.error;
-            } else {
-                adminId = data.admin_id;
-                document.getElementById('adminInfo').textContent = `Logged in as ${username}`;
-                document.getElementById('adminStatus').textContent = '';
-                fetchPendingCashouts();
-                fetchPendingTopups();
+            try {
+                const response = await fetch(`api.php?action=get_user&user_id=${adminId}`);
+                const admin = await response.json();
+                if (admin.error) {
+                    document.getElementById('adminInfo').innerHTML = 'Admin not found. Please <a href="admin_login.html" class="text-blue-500">login</a>.';
+                    localStorage.removeItem('adminId');
+                    setTimeout(() => { window.location.href = 'admin_login.html'; }, 2000);
+                    return false;
+                }
+                document.getElementById('adminInfo').innerHTML = `Admin: ${admin.username} <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
+                return true;
+            } catch (error) {
+                console.error('checkAdmin error:', error);
+                document.getElementById('adminInfo').innerHTML = `Error loading admin data. <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
+                return false;
             }
         }
 
-        function addCrashPointField() {
-            const container = document.getElementById('crashPointsContainer');
+        function logout() {
+            localStorage.removeItem('adminId');
+            document.getElementById('adminInfo').innerHTML = 'Please <a href="admin_login.html" class="text-blue-500">login</a>.';
+            window.location.href = 'admin_login.html';
+        }
+
+        function addCrashPoint() {
+            const container = document.getElementById('crashPoints');
             const div = document.createElement('div');
-            div.className = 'crash-point flex gap-2 mb-2';
+            div.className = 'flex gap-2 mb-2';
             div.innerHTML = `
-                <input type="number" placeholder="Crash Point (e.g., 2.50)" step="0.01" min="1" class="border p-2 rounded w-1/2">
-                <input type="number" placeholder="Win Rate (%)" min="0" max="100" class="border p-2 rounded w-1/2">
+                <input type="number" step="0.01" placeholder="Crash Point (e.g., 2.50)" class="border p-2 rounded w-full">
+                <input type="number" step="0.01" placeholder="Win Rate (%)" class="border p-2 rounded w-full">
+                <button onclick="removeCrashPoint(this)" class="bg-red-500 text-white p-2 rounded hover:bg-red-600">Remove</button>
             `;
             container.appendChild(div);
         }
 
-        async function setCrashPoints() {
-            if (!adminId) {
-                document.getElementById('adminStatus').textContent = 'Please login first.';
-                return;
-            }
+        function removeCrashPoint(button) {
+            button.parentElement.remove();
+        }
+
+        async function submitCrashPoints() {
+            if (!adminId || !await checkAdmin()) return;
             const crashPoints = [];
-            document.querySelectorAll('.crash-point').forEach(div => {
-                const crashPoint = parseFloat(div.querySelector('input[type="number"]:nth-child(1)').value);
-                const winRate = parseFloat(div.querySelector('input[type="number"]:nth-child(2)').value);
-                if (!isNaN(crashPoint) && crashPoint >= 1 && !isNaN(winRate) && winRate >= 0 && winRate <= 100) {
-                    crashPoints.push({ crash_point: crashPoint, win_rate: winRate });
+            document.querySelectorAll('#crashPoints div').forEach(div => {
+                const crashPoint = div.children[0].value;
+                const winRate = div.children[1].value;
+                if (crashPoint && winRate) {
+                    crashPoints.push({ crash_point: parseFloat(crashPoint), win_rate: parseFloat(winRate) });
                 }
             });
-
-            if (crashPoints.length === 0) {
-                document.getElementById('adminStatus').textContent = 'Add at least one valid crash point and win rate';
-                return;
+            try {
+                const response = await fetch('api.php?action=set_crash_points', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ admin_id: adminId, crash_points: crashPoints })
+                });
+                const data = await response.json();
+                document.getElementById('adminInfo').textContent = data.error || 'Crash points submitted.';
+            } catch (error) {
+                console.error('submitCrashPoints error:', error);
+                document.getElementById('adminInfo').textContent = 'Error submitting crash points';
             }
-
-            const response = await fetch('api.php?action=set_crash_points', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ admin_id: adminId, crash_points: crashPoints })
-            });
-            const data = await response.json();
-            document.getElementById('adminStatus').textContent = data.error || 'Crash points set successfully';
         }
 
-        async function fetchPendingCashouts() {
-            if (!adminId) return;
-            const response = await fetch('api.php?action=get_pending_cashouts');
-            const cashouts = await response.json();
-            const cashoutList = document.getElementById('cashoutList');
-            cashoutList.innerHTML = '';
-            cashouts.forEach(cashout => {
-                const li = document.createElement('li');
-                li.innerHTML = `User ${cashout.username}: Bet $${cashout.bet_amount}, Cashout at ${cashout.cashout_multiplier}x, Win $${cashout.win_amount} ` +
-                    `<button onclick="approveCashout(${cashout.id})" class="bg-green-500 text-white p-1 rounded ml-2">Approve</button> ` +
-                    `<button onclick="rejectCashout(${cashout.id})" class="bg-red-500 text-white p-1 rounded ml-2">Reject</button>`;
-                cashoutList.appendChild(li);
-            });
+        async function fetchPendingTransactions() {
+            if (!adminId || !await checkAdmin()) return;
+            try {
+                const response = await fetch('api.php?action=get_pending_transactions');
+                const requests = await response.json();
+                console.log('fetchPendingTransactions response:', requests);
+                const pendingList = document.getElementById('pendingList');
+                pendingList.innerHTML = '';
+                requests.forEach(req => {
+                    const li = document.createElement('li');
+                    li.textContent = `${req.username} requests $${parseFloat(req.amount).toFixed(2)} (${req.type})`;
+                    const approveBtn = document.createElement('button');
+                    approveBtn.textContent = 'Approve';
+                    approveBtn.className = 'bg-green-500 text-white p-1 rounded ml-2 hover:bg-green-600';
+                    approveBtn.onclick = () => approveTransaction(req.id);
+                    const rejectBtn = document.createElement('button');
+                    rejectBtn.textContent = 'Reject';
+                    rejectBtn.className = 'bg-red-500 text-white p-1 rounded ml-2 hover:bg-red-600';
+                    rejectBtn.onclick = () => rejectTransaction(req.id);
+                    li.appendChild(approveBtn);
+                    li.appendChild(rejectBtn);
+                    pendingList.appendChild(li);
+                });
+            } catch (error) {
+                console.error('fetchPendingTransactions error:', error);
+                document.getElementById('adminInfo').textContent = 'Error fetching pending transactions';
+            }
         }
 
-        async function approveCashout(betId) {
-            if (!adminId) return;
-            const response = await fetch('api.php?action=approve_cashout', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ bet_id: betId, admin_id: adminId })
-            });
-            const data = await response.json();
-            document.getElementById('adminStatus').textContent = data.error || data.message;
-            fetchPendingCashouts();
+        async function approveTransaction(requestId) {
+            try {
+                const response = await fetch('api.php?action=approve_transaction', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ request_id: requestId })
+                });
+                const data = await response.json();
+                document.getElementById('adminInfo').textContent = data.error || 'Transaction approved.';
+                fetchPendingTransactions();
+            } catch (error) {
+                console.error('approveTransaction error:', error);
+                document.getElementById('adminInfo').textContent = 'Error approving transaction';
+            }
         }
 
-        async function rejectCashout(betId) {
-            if (!adminId) return;
-            const response = await fetch('api.php?action=reject_cashout', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ bet_id: betId })
-            });
-            const data = await response.json();
-            document.getElementById('adminStatus').textContent = data.error || data.message;
-            fetchPendingCashouts();
+        async function rejectTransaction(requestId) {
+            try {
+                const response = await fetch('api.php?action=reject_transaction', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ request_id: requestId })
+                });
+                const data = await response.json();
+                document.getElementById('adminInfo').textContent = data.error || 'Transaction rejected.';
+                fetchPendingTransactions();
+            } catch (error) {
+                console.error('rejectTransaction error:', error);
+                document.getElementById('adminInfo').textContent = 'Error rejecting transaction';
+            }
         }
 
-        async function fetchPendingTopups() {
-            if (!adminId) return;
-            const response = await fetch('api.php?action=get_pending_topups');
-            const requests = await response.json();
-            const topupList = document.getElementById('topupList');
-            topupList.innerHTML = '';
-            requests.forEach(request => {
-                const li = document.createElement('li');
-                li.innerHTML = `User ${request.username}: Top-up $${request.amount} ` +
-                    `<button onclick="approveTopup(${request.id})" class="bg-green-500 text-white p-1 rounded ml-2">Approve</button> ` +
-                    `<button onclick="rejectTopup(${request.id})" class="bg-red-500 text-white p-1 rounded ml-2">Reject</button>`;
-                topupList.appendChild(li);
-            });
-        }
-
-        async function approveTopup(requestId) {
-            if (!adminId) return;
-            const response = await fetch('api.php?action=approve_topup', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ request_id: requestId })
-            });
-            const data = await response.json();
-            document.getElementById('adminStatus').textContent = data.error || data.message;
-            fetchPendingTopups();
-        }
-
-        async function rejectTopup(requestId) {
-            if (!adminId) return;
-            const response = await fetch('api.php?action=reject_topup', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ request_id: requestId })
-            });
-            const data = await response.json();
-            document.getElementById('adminStatus').textContent = data.error || data.message;
-            fetchPendingTopups();
-        }
+        // Initialize
+        checkAdmin().then(() => fetchPendingTransactions());
     </script>
 </body>
 </html>

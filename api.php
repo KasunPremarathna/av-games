@@ -11,6 +11,7 @@ $pass = 'Kasun2052'; // Replace with your MySQL password
 
 
 
+
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -18,6 +19,19 @@ try {
     error_log("Connection failed: " . $e->getMessage());
     echo json_encode(['error' => 'Connection failed']);
     exit;
+}
+
+function generateCrashPoint() {
+    $rand = mt_rand(0, 10000) / 100; // 0 to 100
+    if ($rand < 50) { // 50% chance for 1.10–2.00
+        return round(1.10 + (mt_rand(0, 90) / 100), 2); // 1.10 to 2.00
+    } elseif ($rand < 80) { // 30% chance for 2.01–4.00
+        return round(2.01 + (mt_rand(0, 199) / 100), 2); // 2.01 to 4.00
+    } elseif ($rand < 95) { // 15% chance for 4.01–7.00
+        return round(4.01 + (mt_rand(0, 299) / 100), 2); // 4.01 to 7.00
+    } else { // 5% chance for 7.01–20.00
+        return round(7.01 + (mt_rand(0, 1299) / 100), 2); // 7.01 to 20.00
+    }
 }
 
 $method = $_SERVER['REQUEST_METHOD'];
@@ -141,7 +155,7 @@ switch ($action) {
                 error_log("get_next_game: game_id={$game['id']}, crash_point={$game['crash_point']}");
                 echo json_encode(['game_id' => $game['id'], 'crash_point' => $game['crash_point']]);
             } else {
-                $crash_point = round(1 + (mt_rand(10, 1000) / 100), 2);
+                $crash_point = generateCrashPoint();
                 $win_rate = round(mt_rand(10, 90), 2);
                 $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, NULL, TRUE)');
                 $stmt->execute([$crash_point, $win_rate]);
@@ -163,7 +177,7 @@ switch ($action) {
             }
             $stmt = $pdo->prepare('UPDATE games SET is_active = FALSE WHERE id = ?');
             $stmt->execute([$game_id]);
-            $crash_point = round(1 + (mt_rand(10, 1000) / 100), 2);
+            $crash_point = generateCrashPoint();
             $win_rate = round(mt_rand(10, 90), 2);
             $stmt = $pdo->prepare('INSERT INTO games (crash_point, win_rate, set_by_admin_id, is_active) VALUES (?, ?, NULL, FALSE)');
             $stmt->execute([$crash_point, $win_rate]);
@@ -265,6 +279,117 @@ switch ($action) {
         }
         break;
 
+    case 'get_active_bets':
+        if ($method === 'GET') {
+            $game_id = $_GET['game_id'] ?? 0;
+            $stmt = $pdo->prepare('SELECT b.bet_amount, u.username FROM bets b JOIN users u ON b.user_id = u.id WHERE b.game_id = ? AND b.cashout_status IS NULL');
+            $stmt->execute([$game_id]);
+            $bets = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($bets as &$bet) {
+                $bet['bet_amount'] = floatval($bet['bet_amount']);
+            }
+            error_log("get_active_bets: game_id=$game_id, count=" . count($bets));
+            echo json_encode($bets);
+        }
+        break;
+
+    case 'request_transaction':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $user_id = $data['user_id'] ?? 0;
+            $amount = floatval($data['amount'] ?? 0);
+            $type = $data['type'] ?? 'topup';
+
+            error_log("request_transaction input: user_id=$user_id, amount=$amount, type=$type");
+
+            if ($amount <= 0 || !$user_id) {
+                error_log("Invalid transaction request: user_id=$user_id, amount=$amount, type=$type");
+                echo json_encode(['error' => 'Invalid amount or user ID']);
+                exit;
+            }
+
+            if ($type === 'withdraw') {
+                $stmt = $pdo->prepare('SELECT balance FROM users WHERE id = ?');
+                $stmt->execute([$user_id]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$user || floatval($user['balance']) < $amount) {
+                    error_log("Insufficient balance for withdraw: user_id=$user_id, balance=" . ($user['balance'] ?? 'N/A') . ", amount=$amount");
+                    echo json_encode(['error' => 'Insufficient balance']);
+                    exit;
+                }
+            }
+
+            $stmt = $pdo->prepare('INSERT INTO topup_requests (user_id, amount, type) VALUES (?, ?, ?)');
+            $stmt->execute([$user_id, $amount, $type]);
+            error_log("Transaction request submitted: user_id=$user_id, amount=$amount, type=$type");
+            echo json_encode(['message' => ucfirst($type) . ' request submitted']);
+        }
+        break;
+
+    case 'get_pending_transactions':
+        if ($method === 'GET') {
+            $stmt = $pdo->query('SELECT t.id, t.user_id, t.amount, t.type, u.username FROM topup_requests t JOIN users u ON t.user_id = u.id WHERE t.status = "pending"');
+            $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($requests as &$request) {
+                $request['amount'] = floatval($request['amount']);
+            }
+            error_log("get_pending_transactions: count=" . count($requests));
+            echo json_encode($requests);
+        }
+        break;
+
+    case 'approve_transaction':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $request_id = $data['request_id'] ?? 0;
+            $stmt = $pdo->prepare('SELECT user_id, amount, type FROM topup_requests WHERE id = ? AND status = ?');
+            $stmt->execute([$request_id, 'pending']);
+            $request = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$request) {
+                error_log("Invalid or already processed transaction request: request_id=$request_id");
+                echo json_encode(['error' => 'Invalid or already processed request']);
+                exit;
+            }
+
+            if ($request['type'] === 'withdraw') {
+                $stmt = $pdo->prepare('SELECT balance FROM users WHERE id = ?');
+                $stmt->execute([$request['user_id']]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$user || floatval($user['balance']) < floatval($request['amount'])) {
+                    error_log("Insufficient balance for withdraw approval: user_id={$request['user_id']}, balance=" . ($user['balance'] ?? 'N/A') . ", amount={$request['amount']}");
+                    echo json_encode(['error' => 'Insufficient balance']);
+                    exit;
+                }
+                $stmt = $pdo->prepare('UPDATE users SET balance = balance - ? WHERE id = ?');
+                $stmt->execute([floatval($request['amount']), $request['user_id']]);
+            } elseif ($request['type'] === 'topup') {
+                $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
+                $stmt->execute([floatval($request['amount']), $request['user_id']]);
+            }
+
+            $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ?');
+            $stmt->execute(['approved', $request_id]);
+            error_log("Transaction approved: request_id=$request_id, user_id={$request['user_id']}, amount={$request['amount']}, type={$request['type']}");
+            echo json_encode(['message' => ucfirst($request['type']) . ' approved']);
+        }
+        break;
+
+    case 'reject_transaction':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $request_id = $data['request_id'] ?? 0;
+            $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ? AND status = ?');
+            $stmt->execute(['rejected', $request_id, 'pending']);
+            if ($stmt->rowCount() > 0) {
+                error_log("Transaction rejected: request_id=$request_id");
+                echo json_encode(['message' => 'Transaction rejected']);
+            } else {
+                error_log("Invalid or already processed transaction request: request_id=$request_id");
+                echo json_encode(['error' => 'Invalid or already processed request']);
+            }
+        }
+        break;
+
     case 'get_crash_history':
         if ($method === 'GET') {
             $stmt = $pdo->prepare('SELECT id, crash_point, created_at FROM games ORDER BY created_at DESC');
@@ -320,57 +445,6 @@ switch ($action) {
             }
             error_log("get_history: user_id=$user_id, history_count=" . count($history));
             echo json_encode($history);
-        }
-        break;
-
-    case 'get_pending_topups':
-        if ($method === 'GET') {
-            $stmt = $pdo->query('SELECT t.id, t.user_id, t.amount, u.username FROM topup_requests t JOIN users u ON t.user_id = u.id WHERE t.status = "pending"');
-            $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($requests as &$request) {
-                $request['amount'] = floatval($request['amount']);
-            }
-            error_log("get_pending_topups: count=" . count($requests));
-            echo json_encode($requests);
-        }
-        break;
-
-    case 'approve_topup':
-        if ($method === 'POST') {
-            $data = json_decode(file_get_contents('php://input'), true);
-            $request_id = $data['request_id'] ?? 0;
-            $stmt = $pdo->prepare('SELECT user_id, amount FROM topup_requests WHERE id = ? AND status = ?');
-            $stmt->execute([$request_id, 'pending']);
-            $request = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$request) {
-                error_log("Invalid or already processed topup request: request_id=$request_id");
-                echo json_encode(['error' => 'Invalid or already processed request']);
-                exit;
-            }
-
-            $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ?');
-            $stmt->execute(['approved', $request_id]);
-
-            $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
-            $stmt->execute([floatval($request['amount']), $request['user_id']]);
-            error_log("Topup approved: request_id=$request_id, user_id={$request['user_id']}, amount={$request['amount']}");
-            echo json_encode(['message' => 'Top-up approved']);
-        }
-        break;
-
-    case 'reject_topup':
-        if ($method === 'POST') {
-            $data = json_decode(file_get_contents('php://input'), true);
-            $request_id = $data['request_id'] ?? 0;
-            $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ? AND status = ?');
-            $stmt->execute(['rejected', $request_id, 'pending']);
-            if ($stmt->rowCount() > 0) {
-                error_log("Topup rejected: request_id=$request_id");
-                echo json_encode(['message' => 'Top-up rejected']);
-            } else {
-                error_log("Invalid or already processed topup request: request_id=$request_id");
-                echo json_encode(['error' => 'Invalid or already processed request']);
-            }
         }
         break;
 }
