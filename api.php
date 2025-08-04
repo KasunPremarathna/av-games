@@ -3,9 +3,9 @@ header('Content-Type: application/json');
 
 $db_config = [
     'host' => 'localhost',
-    'dbname' => 'kasunpre_bikeapp',
-    'user' => 'kasunpre_bikeapp',
-    'password' => 'your_password_here'
+    'dbname' => 'kasunpre_av',
+    'user' => 'kasunpre_av',
+    'password' => 'Kasun2052'
 ];
 
 try {
