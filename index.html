@@ -13,18 +13,6 @@
     <div class="container mx-auto p-4">
         <h1 class="text-3xl font-bold text-center mb-4">Aviator Paper Bet</h1>
         <div id="userInfo" class="mb-4"></div>
-        <div id="adminPanel" class="bg-white p-6 rounded-lg shadow-md mb-4 hidden">
-            <h2 class="text-xl font-bold mb-4">Admin Settings</h2>
-            <div class="mb-4">
-                <label class="block mb-2">Betting Phase Duration (seconds):</label>
-                <input type="number" id="bettingDuration" min="5" max="30" step="1" class="border p-2 rounded w-full">
-            </div>
-            <div class="mb-4">
-                <label class="block mb-2">Running Phase Duration (seconds):</label>
-                <input type="number" id="runningDuration" min="10" max="120" step="1" class="border p-2 rounded w-full">
-            </div>
-            <button onclick="setGameSettings()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Set Game Timings</button>
-        </div>
         <div class="flex flex-col md:flex-row gap-4">
             <div class="bg-white p-6 rounded-lg shadow-md md:w-1/2">
                 <h2 class="text-xl font-bold mb-4">Place Bet</h2>
@@ -61,9 +49,8 @@
         let lastHistoryTime = null;
         let lastGameState = null;
         let pollInterval = null;
-        let bettingDuration = 10; // Default
-        let runningDuration = 60; // Default
-        let isAdmin = false;
+        let bettingDuration = 10;
+        let runningDuration = 60;
 
         const ctx = document.getElementById('multiplierChart').getContext('2d');
         const chart = new Chart(ctx, {
@@ -150,13 +137,11 @@
             const userInfo = document.getElementById('userInfo');
             const balance = document.getElementById('balance');
             const status = document.getElementById('status');
-            const adminPanel = document.getElementById('adminPanel');
 
             if (!userId) {
-                userInfo.innerHTML = 'Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
+                userInfo.innerHTML = 'Please <a href="login.html" class="text-blue-500">login</a>.';
                 balance.textContent = 'Balance: Not logged in';
                 status.textContent = 'User not logged in.';
-                adminPanel.classList.add('hidden');
                 return false;
             }
 
@@ -166,7 +151,7 @@
                 console.log('fetchUser:', responseText, 'Status:', response.status);
                 const user = JSON.parse(responseText);
                 if (user.error) {
-                    userInfo.innerHTML = 'User not found. Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
+                    userInfo.innerHTML = 'User not found. Please <a href="login.html" class="text-blue-500">login</a>.';
                     balance.textContent = 'Balance: User not found';
                     status.textContent = 'User not found. Logging out...';
                     localStorage.removeItem('userId');
@@ -174,30 +159,33 @@
                     localStorage.removeItem('gameRunning');
                     localStorage.removeItem('gameId');
                     setTimeout(() => { window.location.href = 'login.html'; }, 2000);
-                    adminPanel.classList.add('hidden');
+                    return false;
+                }
+
+                if (user.is_admin) {
+                    userInfo.innerHTML = `Admin detected. <a href="admin.html" class="text-blue-500">Go to Admin Panel</a> | <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
+                    balance.textContent = 'Balance: Admin account';
+                    status.textContent = 'Redirecting to admin panel...';
+                    setTimeout(() => { window.location.href = 'admin.html'; }, 2000);
                     return false;
                 }
 
                 const userBalance = parseFloat(user.balance);
-                isAdmin = user.is_admin || false;
                 if (isNaN(userBalance)) {
                     userInfo.innerHTML = `User: ${user.username}, Balance: Error <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
                     balance.textContent = 'Balance: Invalid balance';
                     status.textContent = 'Error: Invalid balance data';
-                    adminPanel.classList.add('hidden');
                     return false;
                 }
 
                 userInfo.innerHTML = `User: ${user.username}, Balance: $${userBalance.toFixed(2)} <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
                 balance.textContent = `Current Balance: $${userBalance.toFixed(2)}`;
-                adminPanel.classList.toggle('hidden', !isAdmin);
                 return true;
             } catch (error) {
                 console.error('fetchUser error:', error.message);
                 userInfo.innerHTML = `Error loading user data. <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
                 balance.textContent = 'Balance: Error';
                 status.textContent = `Error fetching user data: ${error.message}`;
-                adminPanel.classList.add('hidden');
                 return false;
             }
         }
@@ -211,12 +199,11 @@
             gameId = null;
             betId = null;
             gameRunning = false;
-            document.getElementById('userInfo').innerHTML = 'Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
+            document.getElementById('userInfo').innerHTML = 'Please <a href="login.html" class="text-blue-500">login</a>.';
             document.getElementById('balance').textContent = 'Balance: Not logged in';
             document.getElementById('status').textContent = 'Logged out successfully.';
             document.getElementById('historyList').innerHTML = '';
             document.getElementById('activeBets').innerHTML = '';
-            document.getElementById('adminPanel').classList.add('hidden');
             clearInterval(pollInterval);
             window.location.href = 'login.html';
         }
@@ -510,7 +497,6 @@
             }
 
             try {
-                // Validate bet
                 console.log('Validating bet: betId=', betId, 'gameId=', gameId, 'userId=', userId);
                 const validateResponse = await fetch(`api.php?action=validate_bet&bet_id=${betId}&game_id=${gameId}&user_id=${userId}`);
                 const validateResponseText = await validateResponse.text();
@@ -534,7 +520,6 @@
                     return;
                 }
 
-                // Get current game state
                 const response = await fetch(`api.php?action=get_game_state&game_id=${gameId}`);
                 const responseText = await response.text();
                 console.log('cashout get_game_state:', responseText, 'Status:', response.status);
@@ -601,46 +586,6 @@
             }
         }
 
-        async function setGameSettings() {
-            if (!isAdmin) {
-                document.getElementById('status').textContent = 'Access denied: Admin only';
-                return;
-            }
-            const bettingDurationInput = parseFloat(document.getElementById('bettingDuration').value);
-            const runningDurationInput = parseFloat(document.getElementById('runningDuration').value);
-            if (isNaN(bettingDurationInput) || bettingDurationInput < 5 || bettingDurationInput > 30 ||
-                isNaN(runningDurationInput) || runningDurationInput < 10 || runningDurationInput > 120) {
-                document.getElementById('status').textContent = 'Invalid durations: Betting (5-30s), Running (10-120s)';
-                return;
-            }
-
-            try {
-                const response = await fetch('api.php?action=set_game_settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        admin_id: userId,
-                        betting_duration: bettingDurationInput,
-                        running_duration: runningDurationInput
-                    })
-                });
-                const responseText = await response.text();
-                console.log('set_game_settings:', responseText, 'Status:', response.status);
-                const data = JSON.parse(responseText);
-                document.getElementById('status').textContent = data.error || 'Game settings updated';
-                if (!data.error) {
-                    bettingDuration = bettingDurationInput;
-                    runningDuration = runningDurationInput;
-                    document.getElementById('bettingDuration').value = '';
-                    document.getElementById('runningDuration').value = '';
-                    updateGameState();
-                }
-            } catch (error) {
-                console.error('setGameSettings error:', error.message);
-                document.getElementById('status').textContent = 'Error updating game settings: ' + error.message;
-            }
-        }
-
         async function requestTopup() {
             if (!userId || !await fetchUser()) {
                 document.getElementById('status').textContent = 'Please login.';
@@ -698,9 +643,11 @@
         }
 
         // Initialize
-        fetchUser().then(() => {
-            fetchHistory();
-            startGame();
+        fetchUser().then(isValid => {
+            if (isValid) {
+                fetchHistory();
+                startGame();
+            }
         });
     </script>
 </body>

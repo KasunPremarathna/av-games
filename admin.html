@@ -62,12 +62,13 @@
                 isAdmin = user.is_admin || false;
                 if (!isAdmin) {
                     userInfo.innerHTML = `User: ${user.username} (Not an admin) <a href="#" class="text-blue-500 hover:underline" onclick="logout()">Logout</a>`;
-                    status.textContent = 'Access denied: Admin only.';
+                    status.textContent = 'Access denied: Admin only. Redirecting...';
                     adminPanel.classList.add('hidden');
+                    setTimeout(() => { window.location.href = 'index.html'; }, 2000);
                     return false;
                 }
 
-                userInfo.innerHTML = `Admin: ${user.username} <a href="#" class="text-blue-500 hover:underline" onclick="logout()">Logout</a>`;
+                userInfo.innerHTML = `Admin: ${user.username} <a href="index.html" class="text-blue-500 hover:underline">Go to Game</a> | <a href="#" class="text-blue-500 hover:underline" onclick="logout()">Logout</a>`;
                 adminPanel.classList.remove('hidden');
                 setSettingsBtn.disabled = false;
                 await fetchCurrentSettings();
