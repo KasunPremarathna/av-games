@@ -154,6 +154,9 @@
                     balance.textContent = 'Balance: User not found';
                     status.textContent = 'User not found. Logging out...';
                     localStorage.removeItem('userId');
+                    localStorage.removeItem('betId');
+                    localStorage.removeItem('gameRunning');
+                    localStorage.removeItem('gameId');
                     setTimeout(() => { window.location.href = 'login.html'; }, 2000);
                     return false;
                 }
@@ -288,37 +291,42 @@
                         betBtn.disabled = true;
                         cashoutBtn.disabled = true;
                         gameRunning = false;
-                        betId = null;
-                        localStorage.removeItem('betId');
-                        localStorage.removeItem('gameRunning');
-                        return;
+                        if (betId) {
+                            status.textContent = 'Previous game ended. Place a new bet.';
+                        }
+                        chart.data.labels = [];
+                        chart.data.datasets[0].data = [];
+                        chart.update();
+                    } else {
+                        const remaining = Math.max(0, BETTING_DURATION - elapsed);
+                        countdown.textContent = `Betting open: ${Math.ceil(remaining)}s`;
+                        multiplierDisplay.textContent = 'Multiplier: 1.00x';
+                        betBtn.disabled = false;
+                        cashoutBtn.disabled = true;
+                        gameRunning = false;
+                        chart.data.labels = [];
+                        chart.data.datasets[0].data = [];
+                        chart.update();
                     }
-                    const remaining = Math.max(0, BETTING_DURATION - elapsed);
-                    countdown.textContent = `Betting open: ${Math.ceil(remaining)}s`;
-                    multiplierDisplay.textContent = 'Multiplier: 1.00x';
-                    betBtn.disabled = false;
-                    cashoutBtn.disabled = true;
-                    gameRunning = false;
-                    chart.data.labels = [];
-                    chart.data.datasets[0].data = [];
-                    chart.update();
                 } else if (gameData.phase === 'running') {
                     countdown.textContent = 'Game in progress...';
+                    status.textContent = betId ? 'Game started, cash out now!' : 'Game running...';
                     betBtn.disabled = true;
-                    cashoutBtn.disabled = !localStorage.getItem('betId');
+                    cashoutBtn.disabled = !betId;
                     const multiplier = parseFloat(gameData.multiplier);
                     multiplierDisplay.textContent = `Multiplier: ${multiplier.toFixed(2)}x`;
                     chart.data.labels.push(gameData.elapsed.toFixed(1));
                     chart.data.datasets[0].data.push(multiplier.toFixed(2));
                     chart.update();
-                    gameRunning = localStorage.getItem('betId') !== null;
+                    gameRunning = betId !== null;
+                    localStorage.setItem('gameRunning', gameRunning);
                 } else if (gameData.phase === 'crashed') {
                     countdown.textContent = 'Waiting for next game...';
                     betBtn.disabled = true;
                     cashoutBtn.disabled = true;
                     multiplierDisplay.textContent = `Crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x`;
-                    if (gameRunning && localStorage.getItem('betId')) {
-                        status.textContent = `Crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x! You lost.`;
+                    if (gameRunning && betId) {
+                        status.textContent = `Too late: Game crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x! You lost.`;
                         gameRunning = false;
                         betId = null;
                         localStorage.removeItem('betId');
@@ -351,7 +359,7 @@
             clearInterval(pollInterval);
             pollInterval = setInterval(() => {
                 updateGameState();
-            }, lastGameState && lastGameState.phase === 'running' ? 200 : 1000);
+            }, lastGameState && lastGameState.phase === 'running' ? 100 : 1000);
             updateGameState();
         }
 
@@ -374,6 +382,7 @@
                 if (gameData.error || gameData.phase !== 'betting') {
                     document.getElementById('status').textContent = gameData.error || 'Cannot place bet: Game not in betting phase';
                     gameId = null;
+                    localStorage.removeItem('gameId');
                     updateGameState();
                     return;
                 }
@@ -392,6 +401,7 @@
                     document.getElementById('status').textContent = betData.error;
                     if (betData.error === 'No active game available') {
                         gameId = null;
+                        localStorage.removeItem('gameId');
                         updateGameState();
                     }
                     return;
@@ -403,7 +413,7 @@
                 localStorage.setItem('betId', betId);
                 localStorage.setItem('gameRunning', 'true');
                 localStorage.setItem('gameId', gameId);
-                console.log('Bet placed: betId=', betId, 'gameId=', gameId, 'gameRunning=', gameRunning);
+                console.log('Bet placed: betId=', betId, 'gameRunning=', gameRunning, 'gameId=', gameId);
                 document.getElementById('status').textContent = 'Bet placed! Waiting for game to start...';
                 document.getElementById('cashoutBtn').disabled = false;
                 fetchUser();
@@ -411,6 +421,7 @@
                 console.error('placeBet error:', error.message);
                 document.getElementById('status').textContent = 'Error placing bet: ' + error.message;
                 gameId = null;
+                localStorage.removeItem('gameId');
                 updateGameState();
             }
         }
@@ -420,33 +431,74 @@
             gameRunning = localStorage.getItem('gameRunning') === 'true';
             gameId = localStorage.getItem('gameId');
             console.log('cashout check: gameRunning=', gameRunning, 'betId=', betId, 'gameId=', gameId);
+
             if (!gameRunning || !betId || !gameId) {
                 console.log('Cashout blocked: gameRunning=', gameRunning, 'betId=', betId, 'gameId=', gameId);
                 document.getElementById('status').textContent = 'No active bet to cash out';
+                localStorage.removeItem('betId');
+                localStorage.removeItem('gameRunning');
+                localStorage.removeItem('gameId');
+                document.getElementById('cashoutBtn').disabled = true;
+                updateGameState();
                 return;
             }
 
             try {
+                // Validate bet
+                const validateResponse = await fetch(`api.php?action=validate_bet&bet_id=${betId}&game_id=${gameId}&user_id=${userId}`);
+                const validateResponseText = await validateResponse.text();
+                console.log('validate_bet response:', validateResponseText, 'Status:', validateResponse.status);
+                const validateData = JSON.parse(validateResponseText);
+                if (validateData.error) {
+                    console.error('validate_bet error:', validateData.error);
+                    document.getElementById('status').textContent = `Cannot cash out: ${validateData.error}`;
+                    if (validateData.error.includes('Bet already cashed out') || validateData.error.includes('Invalid bet')) {
+                        gameRunning = false;
+                        betId = null;
+                        gameId = null;
+                        localStorage.removeItem('betId');
+                        localStorage.removeItem('gameRunning');
+                        localStorage.removeItem('gameId');
+                        document.getElementById('cashoutBtn').disabled = true;
+                    }
+                    updateGameState();
+                    return;
+                }
+
+                // Get current game state
                 const response = await fetch(`api.php?action=get_game_state&game_id=${gameId}`);
                 const responseText = await response.text();
                 console.log('cashout get_game_state:', responseText, 'Status:', response.status);
                 const gameData = JSON.parse(responseText);
-                if (gameData.error || gameData.phase !== 'running') {
-                    document.getElementById('status').textContent = gameData.error || 'Cannot cash out: Game not running';
-                    gameRunning = false;
-                    betId = null;
-                    gameId = null;
-                    localStorage.removeItem('betId');
-                    localStorage.removeItem('gameRunning');
-                    localStorage.removeItem('gameId');
-                    document.getElementById('cashoutBtn').disabled = true;
+                if (gameData.error) {
+                    document.getElementById('status').textContent = gameData.error;
                     updateGameState();
                     return;
                 }
                 lastGameState = gameData;
                 gameId = gameData.game_id;
 
-                const multiplier = parseFloat(gameData.multiplier || 1.0);
+                let multiplier = parseFloat(gameData.multiplier || 1.0);
+                if (gameData.phase === 'crashed') {
+                    // Try cash-out with crash point if just crashed
+                    multiplier = parseFloat(gameData.crash_point || 1.0);
+                    document.getElementById('status').textContent = `Game just crashed at ${multiplier.toFixed(2)}x. Attempting cash out...`;
+                } else if (gameData.phase !== 'running') {
+                    document.getElementById('status').textContent = `Cannot cash out: Game in ${gameData.phase} phase`;
+                    if (gameData.phase === 'crashed') {
+                        document.getElementById('status').textContent = `Too late: Game crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x! You lost.`;
+                        gameRunning = false;
+                        betId = null;
+                        gameId = null;
+                        localStorage.removeItem('betId');
+                        localStorage.removeItem('gameRunning');
+                        localStorage.removeItem('gameId');
+                        document.getElementById('cashoutBtn').disabled = true;
+                        updateGameState();
+                    }
+                    return;
+                }
+
                 console.log('cashout request:', { bet_id: betId, multiplier: multiplier.toFixed(2), game_id: gameId });
                 const cashoutResponse = await fetch('api.php?action=cashout', {
                     method: 'POST',
@@ -458,7 +510,10 @@
                 const data = JSON.parse(cashoutResponseText);
                 if (data.error) {
                     document.getElementById('status').textContent = `Cashout failed: ${data.error}`;
-                    if (data.error === 'Game crashed' || data.error === 'Game not found or not in running phase') {
+                    if (data.error.includes('Game crashed') || data.error.includes('Game not found or not in running phase') || data.error.includes('Invalid bet or already cashed out')) {
+                        if (data.error.includes('Game crashed')) {
+                            document.getElementById('status').textContent = `Too late: Game crashed at ${parseFloat(data.crash_point || gameData.crash_point || 1.0).toFixed(2)}x! You lost.`;
+                        }
                         gameRunning = false;
                         betId = null;
                         gameId = null;
@@ -483,6 +538,7 @@
             } catch (error) {
                 console.error('cashout error:', error.message);
                 document.getElementById('status').textContent = 'Error submitting cashout: ' + error.message;
+                updateGameState();
             }
         }
 
