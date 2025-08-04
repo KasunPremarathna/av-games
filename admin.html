@@ -2,181 +2,162 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Admin Login - Crash Betting Game</title>
+    <title>Aviator Paper Bet - Admin Panel</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: Arial, sans-serif; }
     </style>
 </head>
-<body class="bg-gray-100">
-    <div class="container mx-auto p-4">
-        <h1 class="text-3xl font-bold text-center mb-4">Crash Betting Game - Admin Panel</h1>
-        
-        <!-- Login Form -->
-        <div id="loginForm" class="bg-white p-6 rounded-lg shadow-md max-w-md mx-auto">
-            <h2 class="text-xl font-bold mb-4">Admin Login</h2>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+    <div class="container mx-auto p-4 max-w-2xl">
+        <h1 class="text-3xl font-bold text-center mb-6 text-gray-800">Aviator Paper Bet - Admin Panel</h1>
+        <div id="userInfo" class="mb-4 text-center text-lg"></div>
+        <div id="adminPanel" class="bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-bold mb-4 text-gray-700">Game Settings</h2>
+            <div id="currentSettings" class="mb-4 text-gray-600"></div>
             <div class="mb-4">
-                <label for="username" class="block text-sm font-medium text-gray-700">Username</label>
-                <input type="text" id="username" placeholder="Username" class="border p-2 rounded w-full">
+                <label for="bettingDuration" class="block mb-2 font-medium">Betting Phase Duration (5-30 seconds):</label>
+                <input type="number" id="bettingDuration" min="5" max="30" step="1" placeholder="e.g., 10" class="border p-2 rounded w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
             <div class="mb-4">
-                <label for="password" class="block text-sm font-medium text-gray-700">Password</label>
-                <input type="password" id="password" placeholder="Password" class="border p-2 rounded w-full">
+                <label for="runningDuration" class="block mb-2 font-medium">Running Phase Duration (10-120 seconds):</label>
+                <input type="number" id="runningDuration" min="10" max="120" step="1" placeholder="e.g., 60" class="border p-2 rounded w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
-            <button onclick="adminLogin()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Login</button>
-            <div id="status" class="text-red-500 mt-2"></div>
-        </div>
-
-        <!-- Admin Dashboard (Hidden until login) -->
-        <div id="dashboard" class="hidden bg-white p-6 rounded-lg shadow-md max-w-2xl mx-auto mt-4">
-            <h2 class="text-xl font-bold mb-4">Admin Dashboard</h2>
-            <p id="adminInfo" class="mb-4"></p>
-            <h3 class="text-lg font-bold mb-2">Pending Transactions</h3>
-            <ul id="pendingList" class="list-disc pl-5 mb-4"></ul>
-            <button onclick="logout()" class="bg-red-500 text-white p-2 rounded w-full hover:bg-red-600">Logout</button>
+            <button onclick="setGameSettings()" id="setSettingsBtn" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600 transition disabled:bg-gray-400" disabled>Update Game Settings</button>
+            <div id="status" class="mt-4 text-center text-red-500"></div>
         </div>
     </div>
 
     <script>
-        let adminId = localStorage.getItem('adminId');
+        let userId = localStorage.getItem('userId');
+        let isAdmin = false;
 
-        async function adminLogin() {
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
+        async function fetchUser() {
+            const userInfo = document.getElementById('userInfo');
+            const adminPanel = document.getElementById('adminPanel');
+            const setSettingsBtn = document.getElementById('setSettingsBtn');
             const status = document.getElementById('status');
 
-            if (!username || !password) {
-                status.textContent = 'Please enter username and password';
+            if (!userId) {
+                userInfo.innerHTML = 'Please <a href="login.html" class="text-blue-500 hover:underline">login</a> as an admin.';
+                adminPanel.classList.add('hidden');
+                status.textContent = 'Not logged in.';
+                return false;
+            }
+
+            try {
+                const response = await fetch(`api.php?action=get_user&user_id=${userId}`);
+                const responseText = await response.text();
+                console.log('fetchUser:', responseText, 'Status:', response.status);
+                const user = JSON.parse(responseText);
+                if (user.error) {
+                    userInfo.innerHTML = 'User not found. Please <a href="login.html" class="text-blue-500 hover:underline">login</a>.';
+                    status.textContent = 'User not found. Logging out...';
+                    adminPanel.classList.add('hidden');
+                    localStorage.removeItem('userId');
+                    setTimeout(() => { window.location.href = 'login.html'; }, 2000);
+                    return false;
+                }
+
+                isAdmin = user.is_admin || false;
+                if (!isAdmin) {
+                    userInfo.innerHTML = `User: ${user.username} (Not an admin) <a href="#" class="text-blue-500 hover:underline" onclick="logout()">Logout</a>`;
+                    status.textContent = 'Access denied: Admin only.';
+                    adminPanel.classList.add('hidden');
+                    return false;
+                }
+
+                userInfo.innerHTML = `Admin: ${user.username} <a href="#" class="text-blue-500 hover:underline" onclick="logout()">Logout</a>`;
+                adminPanel.classList.remove('hidden');
+                setSettingsBtn.disabled = false;
+                await fetchCurrentSettings();
+                return true;
+            } catch (error) {
+                console.error('fetchUser error:', error.message);
+                userInfo.innerHTML = `Error loading user data. <a href="#" class="text-blue-500 hover:underline" onclick="logout()">Logout</a>`;
+                status.textContent = `Error: ${error.message}`;
+                adminPanel.classList.add('hidden');
+                return false;
+            }
+        }
+
+        async function fetchCurrentSettings() {
+            const currentSettings = document.getElementById('currentSettings');
+            try {
+                const response = await fetch('api.php?action=get_game_settings');
+                const responseText = await response.text();
+                console.log('fetchCurrentSettings:', responseText, 'Status:', response.status);
+                const settings = JSON.parse(responseText);
+                if (settings.error) {
+                    currentSettings.textContent = 'Current settings: Not available';
+                    console.error('fetchCurrentSettings error:', settings.error);
+                    return;
+                }
+                currentSettings.textContent = `Current settings: Betting ${settings.betting_duration}s, Running ${settings.running_duration}s`;
+            } catch (error) {
+                console.error('fetchCurrentSettings error:', error.message);
+                currentSettings.textContent = 'Current settings: Error fetching';
+            }
+        }
+
+        async function setGameSettings() {
+            if (!isAdmin) {
+                document.getElementById('status').textContent = 'Access denied: Admin only';
                 return;
             }
 
+            const bettingDurationInput = parseFloat(document.getElementById('bettingDuration').value);
+            const runningDurationInput = parseFloat(document.getElementById('runningDuration').value);
+            const status = document.getElementById('status');
+            const setSettingsBtn = document.getElementById('setSettingsBtn');
+
+            if (isNaN(bettingDurationInput) || bettingDurationInput < 5 || bettingDurationInput > 30 ||
+                isNaN(runningDurationInput) || runningDurationInput < 10 || runningDurationInput > 120) {
+                status.textContent = 'Invalid durations: Betting (5-30s), Running (10-120s)';
+                return;
+            }
+
+            setSettingsBtn.disabled = true;
+            status.textContent = 'Updating settings...';
             try {
-                console.log('Sending admin login request:', { username });
-                const response = await fetch('api.php?action=admin_login', {
+                const response = await fetch('api.php?action=set_game_settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
+                    body: JSON.stringify({
+                        admin_id: userId,
+                        betting_duration: bettingDurationInput,
+                        running_duration: runningDurationInput
+                    })
                 });
                 const responseText = await response.text();
-                console.log('adminLogin raw response:', responseText, 'HTTP Status:', response.status);
+                console.log('set_game_settings:', responseText, 'Status:', response.status);
                 const data = JSON.parse(responseText);
-
-                if (data.error) {
-                    status.textContent = data.error;
-                    console.log('Admin login failed:', data.error);
-                    return;
-                }
-
-                adminId = data.admin_id;
-                localStorage.setItem('adminId', adminId);
-                status.textContent = 'Login successful! Loading dashboard...';
-                console.log('Admin login successful: admin_id=', adminId);
-                document.getElementById('loginForm').classList.add('hidden');
-                document.getElementById('dashboard').classList.remove('hidden');
-                document.getElementById('adminInfo').textContent = `Logged in as ${username}`;
-                fetchPendingTransactions();
-            } catch (error) {
-                console.error('adminLogin error:', error.message);
-                status.textContent = 'Error logging in: ' + error.message;
-            }
-        }
-
-        async function fetchPendingTransactions() {
-            try {
-                const response = await fetch('api.php?action=get_pending_transactions');
-                const responseText = await response.text();
-                console.log('fetchPendingTransactions raw response:', responseText, 'HTTP Status:', response.status);
-                const transactions = JSON.parse(responseText);
-
-                if (transactions.error) {
-                    document.getElementById('status').textContent = transactions.error;
-                    return;
-                }
-
-                const pendingList = document.getElementById('pendingList');
-                pendingList.innerHTML = '';
-                if (Array.isArray(transactions) && transactions.length > 0) {
-                    transactions.forEach(tx => {
-                        const li = document.createElement('li');
-                        li.textContent = `${tx.username} (${tx.type}): $${parseFloat(tx.amount).toFixed(2)}`;
-                        const approveBtn = document.createElement('button');
-                        approveBtn.textContent = 'Approve';
-                        approveBtn.className = 'ml-2 bg-green-500 text-white p-1 rounded hover:bg-green-600';
-                        approveBtn.onclick = () => approveTransaction(tx.id);
-                        const rejectBtn = document.createElement('button');
-                        rejectBtn.textContent = 'Reject';
-                        rejectBtn.className = 'ml-2 bg-red-500 text-white p-1 rounded hover:bg-red-600';
-                        rejectBtn.onclick = () => rejectTransaction(tx.id);
-                        li.appendChild(approveBtn);
-                        li.appendChild(rejectBtn);
-                        pendingList.appendChild(li);
-                    });
-                } else {
-                    pendingList.innerHTML = '<li>No pending transactions</li>';
+                status.textContent = data.error || 'Game settings updated successfully';
+                if (!data.error) {
+                    document.getElementById('bettingDuration').value = '';
+                    document.getElementById('runningDuration').value = '';
+                    await fetchCurrentSettings();
                 }
             } catch (error) {
-                console.error('fetchPendingTransactions error:', error.message);
-                document.getElementById('status').textContent = 'Error fetching transactions: ' + error.message;
-            }
-        }
-
-        async function approveTransaction(requestId) {
-            try {
-                const response = await fetch('api.php?action=approve_transaction', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ request_id: requestId })
-                });
-                const responseText = await response.text();
-                console.log('approveTransaction raw response:', responseText, 'HTTP Status:', response.status);
-                const data = JSON.parse(responseText);
-
-                document.getElementById('status').textContent = data.error || data.message;
-                fetchPendingTransactions();
-            } catch (error) {
-                console.error('approveTransaction error:', error.message);
-                document.getElementById('status').textContent = 'Error approving transaction: ' + error.message;
-            }
-        }
-
-        async function rejectTransaction(requestId) {
-            try {
-                const response = await fetch('api.php?action=reject_transaction', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ request_id: requestId })
-                });
-                const responseText = await response.text();
-                console.log('rejectTransaction raw response:', responseText, 'HTTP Status:', response.status);
-                const data = JSON.parse(responseText);
-
-                document.getElementById('status').textContent = data.error || data.message;
-                fetchPendingTransactions();
-            } catch (error) {
-                console.error('rejectTransaction error:', error.message);
-                document.getElementById('status').textContent = 'Error rejecting transaction: ' + error.message;
+                console.error('setGameSettings error:', error.message);
+                status.textContent = `Error updating settings: ${error.message}`;
+            } finally {
+                setSettingsBtn.disabled = false;
             }
         }
 
         function logout() {
-            console.log('Logging out admin:', adminId);
-            localStorage.removeItem('adminId');
-            adminId = null;
-            document.getElementById('loginForm').classList.remove('hidden');
-            document.getElementById('dashboard').classList.add('hidden');
+            localStorage.removeItem('userId');
+            userId = null;
+            isAdmin = false;
+            document.getElementById('userInfo').innerHTML = 'Please <a href="login.html" class="text-blue-500 hover:underline">login</a>.';
+            document.getElementById('adminPanel').classList.add('hidden');
             document.getElementById('status').textContent = 'Logged out successfully.';
-            document.getElementById('username').value = '';
-            document.getElementById('password').value = '';
-            document.getElementById('pendingList').innerHTML = '';
+            setTimeout(() => { window.location.href = 'login.html'; }, 1000);
         }
 
         // Initialize
-        if (adminId) {
-            document.getElementById('loginForm').classList.add('hidden');
-            document.getElementById('dashboard').classList.remove('hidden');
-            document.getElementById('adminInfo').textContent = 'Logged in as admin';
-            fetchPendingTransactions();
-        }
+        fetchUser();
     </script>
 </body>
 </html>

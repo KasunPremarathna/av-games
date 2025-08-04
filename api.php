@@ -138,6 +138,30 @@ switch ($action) {
         }
         break;
 
+    case 'get_game_settings':
+        if ($method === 'GET') {
+            try {
+                $stmt = $pdo->prepare('SELECT betting_duration, running_duration FROM game_settings ORDER BY created_at DESC LIMIT 1');
+                $stmt->execute();
+                $settings = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($settings) {
+                    $settings['betting_duration'] = floatval($settings['betting_duration']);
+                    $settings['running_duration'] = floatval($settings['running_duration']);
+                    error_log("get_game_settings: betting_duration={$settings['betting_duration']}, running_duration={$settings['running_duration']}");
+                    echo json_encode($settings);
+                } else {
+                    error_log("get_game_settings: No settings found");
+                    http_response_code(404);
+                    echo json_encode(['error' => 'No game settings found']);
+                }
+            } catch (PDOException $e) {
+                error_log("get_game_settings PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+            }
+        }
+        break;
+
     case 'set_game_settings':
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
