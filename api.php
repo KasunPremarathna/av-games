@@ -9,7 +9,6 @@ $db = 'kasunpre_av';
 $user = 'kasunpre_av';
 $pass = 'Kasun2052';
 
-// Configurable betting phase duration (in seconds)
 const BETTING_DURATION = 10;
 
 try {
@@ -24,15 +23,15 @@ try {
 }
 
 function generateCrashPoint() {
-    $rand = mt_rand(0, 10000) / 100; // 0 to 100
-    if ($rand < 50) { // 50% chance for 1.10–2.00
-        return round(1.10 + (mt_rand(0, 90) / 100), 2); // 1.10 to 2.00
-    } elseif ($rand < 80) { // 30% chance for 2.01–4.00
-        return round(2.01 + (mt_rand(0, 199) / 100), 2); // 2.01 to 4.00
-    } elseif ($rand < 95) { // 15% chance for 4.01–7.00
-        return round(4.01 + (mt_rand(0, 299) / 100), 2); // 4.01 to 7.00
-    } else { // 5% chance for 7.01–20.00
-        return round(7.01 + (mt_rand(0, 1299) / 100), 2); // 7.01 to 20.00
+    $rand = mt_rand(0, 10000) / 100;
+    if ($rand < 50) {
+        return round(1.10 + (mt_rand(0, 90) / 100), 2);
+    } elseif ($rand < 80) {
+        return round(2.01 + (mt_rand(0, 199) / 100), 2);
+    } elseif ($rand < 95) {
+        return round(4.01 + (mt_rand(0, 299) / 100), 2);
+    } else {
+        return round(7.01 + (mt_rand(0, 1299) / 100), 2);
     }
 }
 
@@ -182,23 +181,18 @@ switch ($action) {
                     $elapsed = $game['start_time'] ? $current_time - $game['start_time'] : 0;
                     $game['elapsed'] = $elapsed;
 
-                    // Reset stale betting phase (e.g., elapsed > 30s)
                     if ($game['phase'] === 'betting' && $elapsed > 30) {
                         error_log("Stale betting phase detected: game_id={$game['id']}, elapsed=$elapsed. Resetting game.");
                         $stmt = $pdo->prepare('UPDATE games SET phase = ?, is_active = FALSE WHERE id = ?');
                         $stmt->execute(['crashed', $game['id']]);
-                        $game = null; // Trigger new game creation below
-                    }
-                    // Handle betting phase transition
-                    elseif ($game['phase'] === 'betting' && $elapsed >= BETTING_DURATION) {
+                        $game = null;
+                    } elseif ($game['phase'] === 'betting' && $elapsed >= BETTING_DURATION) {
                         $stmt = $pdo->prepare('UPDATE games SET phase = ?, start_time = NOW() WHERE id = ?');
                         $stmt->execute(['running', $game['id']]);
                         $game['phase'] = 'running';
                         $game['start_time'] = $current_time;
                         $game['elapsed'] = 0;
-                    }
-                    // Handle running phase
-                    elseif ($game['phase'] === 'running') {
+                    } elseif ($game['phase'] === 'running') {
                         $multiplier = 1 + ($elapsed * 0.5);
                         if ($multiplier >= $game['crash_point']) {
                             $stmt = $pdo->prepare('UPDATE games SET phase = ?, is_active = FALSE WHERE id = ?');
@@ -297,7 +291,6 @@ switch ($action) {
                     exit;
                 }
 
-                // Validate game_id; fall back to latest active game if invalid
                 $stmt = $pdo->prepare('SELECT id, phase FROM games WHERE id = ? AND is_active = TRUE');
                 $stmt->execute([$game_id]);
                 $game = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -663,6 +656,34 @@ switch ($action) {
                 http_response_code(500);
                 echo json_encode(['error' => 'Database error']);
                 exit;
+            }
+        }
+        break;
+
+    case 'debug_bet':
+        if ($method === 'GET') {
+            $bet_id = $_GET['bet_id'] ?? 0;
+            $user_id = $_GET['user_id'] ?? 0;
+            error_log("debug_bet input: bet_id=$bet_id, user_id=$user_id");
+            try {
+                $stmt = $pdo->prepare('SELECT b.id, b.game_id, b.user_id, b.bet_amount, b.cashout_status, b.cashout_multiplier, g.phase, g.crash_point FROM bets b JOIN games g ON b.game_id = g.id WHERE b.id = ? AND b.user_id = ?');
+                $stmt->execute([$bet_id, $user_id]);
+                $bet = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($bet) {
+                    $bet['bet_amount'] = floatval($bet['bet_amount']);
+                    $bet['cashout_multiplier'] = floatval($bet['cashout_multiplier'] ?? 0);
+                    $bet['crash_point'] = floatval($bet['crash_point']);
+                    error_log("debug_bet result: bet_id=$bet_id, user_id=$user_id, game_id={$bet['game_id']}, phase={$bet['phase']}");
+                    echo json_encode($bet);
+                } else {
+                    error_log("debug_bet: No bet found for bet_id=$bet_id, user_id=$user_id");
+                    http_response_code(404);
+                    echo json_encode(['error' => 'Bet not found']);
+                }
+            } catch (PDOException $e) {
+                error_log("debug_bet PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
             }
         }
         break;
