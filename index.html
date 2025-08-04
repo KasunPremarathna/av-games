@@ -13,6 +13,18 @@
     <div class="container mx-auto p-4">
         <h1 class="text-3xl font-bold text-center mb-4">Aviator Paper Bet</h1>
         <div id="userInfo" class="mb-4"></div>
+        <div id="adminPanel" class="bg-white p-6 rounded-lg shadow-md mb-4 hidden">
+            <h2 class="text-xl font-bold mb-4">Admin Settings</h2>
+            <div class="mb-4">
+                <label class="block mb-2">Betting Phase Duration (seconds):</label>
+                <input type="number" id="bettingDuration" min="5" max="30" step="1" class="border p-2 rounded w-full">
+            </div>
+            <div class="mb-4">
+                <label class="block mb-2">Running Phase Duration (seconds):</label>
+                <input type="number" id="runningDuration" min="10" max="120" step="1" class="border p-2 rounded w-full">
+            </div>
+            <button onclick="setGameSettings()" class="bg-blue-500 text-white p-2 rounded w-full hover:bg-blue-600">Set Game Timings</button>
+        </div>
         <div class="flex flex-col md:flex-row gap-4">
             <div class="bg-white p-6 rounded-lg shadow-md md:w-1/2">
                 <h2 class="text-xl font-bold mb-4">Place Bet</h2>
@@ -49,7 +61,9 @@
         let lastHistoryTime = null;
         let lastGameState = null;
         let pollInterval = null;
-        const BETTING_DURATION = 10;
+        let bettingDuration = 10; // Default
+        let runningDuration = 60; // Default
+        let isAdmin = false;
 
         const ctx = document.getElementById('multiplierChart').getContext('2d');
         const chart = new Chart(ctx, {
@@ -136,11 +150,13 @@
             const userInfo = document.getElementById('userInfo');
             const balance = document.getElementById('balance');
             const status = document.getElementById('status');
+            const adminPanel = document.getElementById('adminPanel');
 
             if (!userId) {
                 userInfo.innerHTML = 'Please <a href="register.html" class="text-blue-500">register</a> or <a href="login.html" class="text-blue-500">login</a>.';
                 balance.textContent = 'Balance: Not logged in';
                 status.textContent = 'User not logged in.';
+                adminPanel.classList.add('hidden');
                 return false;
             }
 
@@ -158,25 +174,30 @@
                     localStorage.removeItem('gameRunning');
                     localStorage.removeItem('gameId');
                     setTimeout(() => { window.location.href = 'login.html'; }, 2000);
+                    adminPanel.classList.add('hidden');
                     return false;
                 }
 
                 const userBalance = parseFloat(user.balance);
+                isAdmin = user.is_admin || false;
                 if (isNaN(userBalance)) {
                     userInfo.innerHTML = `User: ${user.username}, Balance: Error <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
                     balance.textContent = 'Balance: Invalid balance';
                     status.textContent = 'Error: Invalid balance data';
+                    adminPanel.classList.add('hidden');
                     return false;
                 }
 
                 userInfo.innerHTML = `User: ${user.username}, Balance: $${userBalance.toFixed(2)} <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
                 balance.textContent = `Current Balance: $${userBalance.toFixed(2)}`;
+                adminPanel.classList.toggle('hidden', !isAdmin);
                 return true;
             } catch (error) {
                 console.error('fetchUser error:', error.message);
                 userInfo.innerHTML = `Error loading user data. <a href="#" class="text-blue-500" onclick="logout()">Logout</a>`;
                 balance.textContent = 'Balance: Error';
                 status.textContent = `Error fetching user data: ${error.message}`;
+                adminPanel.classList.add('hidden');
                 return false;
             }
         }
@@ -195,6 +216,7 @@
             document.getElementById('status').textContent = 'Logged out successfully.';
             document.getElementById('historyList').innerHTML = '';
             document.getElementById('activeBets').innerHTML = '';
+            document.getElementById('adminPanel').classList.add('hidden');
             clearInterval(pollInterval);
             window.location.href = 'login.html';
         }
@@ -244,7 +266,7 @@
                 combinedHistory.forEach(item => {
                     const li = document.createElement('li');
                     let colorClass = '';
-                    if (item.type === 'crash' || item.type === 'bet') {
+                    if (item.type === 'bet' || item.type === 'crash') {
                         const cp = item.crash_point;
                         if (cp >= 1 && cp <= 2) colorClass = 'text-red-500';
                         else if (cp > 2 && cp <= 3) colorClass = 'text-pink-500';
@@ -274,6 +296,8 @@
                 }
 
                 gameId = gameData.game_id;
+                bettingDuration = parseFloat(gameData.betting_duration) || 10;
+                runningDuration = parseFloat(gameData.running_duration) || 60;
                 localStorage.setItem('gameId', gameId);
                 lastGameState = gameData;
 
@@ -285,7 +309,7 @@
 
                 if (gameData.phase === 'betting') {
                     const elapsed = parseFloat(gameData.elapsed);
-                    if (elapsed > 30 || isNaN(elapsed)) {
+                    if (elapsed > bettingDuration * 2 || isNaN(elapsed)) {
                         console.warn('Invalid elapsed time:', elapsed);
                         countdown.textContent = 'Waiting for new game...';
                         betBtn.disabled = true;
@@ -298,7 +322,7 @@
                         chart.data.datasets[0].data = [];
                         chart.update();
                     } else {
-                        const remaining = Math.max(0, BETTING_DURATION - elapsed);
+                        const remaining = Math.max(0, bettingDuration - elapsed);
                         countdown.textContent = `Betting open: ${Math.ceil(remaining)}s`;
                         multiplierDisplay.textContent = 'Multiplier: 1.00x';
                         betBtn.disabled = false;
@@ -326,7 +350,7 @@
                     cashoutBtn.disabled = true;
                     multiplierDisplay.textContent = `Crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x`;
                     if (gameRunning && betId) {
-                        status.textContent = `Too late: Game crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x! You lost.`;
+                        status.textContent = `Game crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x! Bet lost.`;
                         gameRunning = false;
                         betId = null;
                         localStorage.removeItem('betId');
@@ -426,41 +450,86 @@
             }
         }
 
+        async function fetchLatestBet() {
+            try {
+                const response = await fetch(`api.php?action=get_history&user_id=${userId}`);
+                const responseText = await response.text();
+                console.log('fetchLatestBet:', responseText, 'Status:', response.status);
+                const bets = JSON.parse(responseText);
+                if (bets.error) {
+                    console.error('fetchLatestBet error:', bets.error);
+                    return null;
+                }
+                const activeBet = bets.find(bet => bet.game_id == gameId && bet.cashout_status === null);
+                if (activeBet) {
+                    betId = activeBet.id;
+                    localStorage.setItem('betId', betId);
+                    localStorage.setItem('gameRunning', 'true');
+                    console.log('Restored bet: betId=', betId, 'gameId=', gameId);
+                    return activeBet;
+                }
+                return null;
+            } catch (error) {
+                console.error('fetchLatestBet error:', error.message);
+                return null;
+            }
+        }
+
         async function cashout() {
             betId = localStorage.getItem('betId');
             gameRunning = localStorage.getItem('gameRunning') === 'true';
             gameId = localStorage.getItem('gameId');
-            console.log('cashout check: gameRunning=', gameRunning, 'betId=', betId, 'gameId=', gameId);
+            userId = localStorage.getItem('userId');
+            console.log('cashout check: userId=', userId, 'gameRunning=', gameRunning, 'betId=', betId, 'gameId=', gameId);
+
+            if (!userId) {
+                document.getElementById('status').textContent = 'Please login to cash out';
+                document.getElementById('cashoutBtn').disabled = true;
+                return;
+            }
 
             if (!gameRunning || !betId || !gameId) {
-                console.log('Cashout blocked: gameRunning=', gameRunning, 'betId=', betId, 'gameId=', gameId);
-                document.getElementById('status').textContent = 'No active bet to cash out';
-                localStorage.removeItem('betId');
-                localStorage.removeItem('gameRunning');
-                localStorage.removeItem('gameId');
-                document.getElementById('cashoutBtn').disabled = true;
-                updateGameState();
-                return;
+                console.log('Attempting to restore bet: gameRunning=', gameRunning, 'betId=', betId, 'gameId=', gameId);
+                const restoredBet = await fetchLatestBet();
+                if (!restoredBet) {
+                    document.getElementById('status').textContent = 'No active bet to cash out. Place a new bet.';
+                    localStorage.removeItem('betId');
+                    localStorage.removeItem('gameRunning');
+                    localStorage.removeItem('gameId');
+                    document.getElementById('cashoutBtn').disabled = true;
+                    updateGameState();
+                    return;
+                }
+                betId = restoredBet.id;
+                gameId = restoredBet.game_id;
+                gameRunning = true;
+                localStorage.setItem('betId', betId);
+                localStorage.setItem('gameRunning', 'true');
+                localStorage.setItem('gameId', gameId);
+                document.getElementById('cashoutBtn').disabled = false;
             }
 
             try {
                 // Validate bet
+                console.log('Validating bet: betId=', betId, 'gameId=', gameId, 'userId=', userId);
                 const validateResponse = await fetch(`api.php?action=validate_bet&bet_id=${betId}&game_id=${gameId}&user_id=${userId}`);
                 const validateResponseText = await validateResponse.text();
                 console.log('validate_bet response:', validateResponseText, 'Status:', validateResponse.status);
                 const validateData = JSON.parse(validateResponseText);
                 if (validateData.error) {
                     console.error('validate_bet error:', validateData.error);
-                    document.getElementById('status').textContent = `Cannot cash out: ${validateData.error}`;
+                    document.getElementById('status').textContent = validateData.error === 'Invalid bet' 
+                        ? 'Bet not found, please place a new bet' 
+                        : validateData.error === 'Bet already cashed out' 
+                        ? 'Bet already cashed out'
+                        : `Cannot cash out: ${validateData.error}`;
                     if (validateData.error.includes('Bet already cashed out') || validateData.error.includes('Invalid bet')) {
                         gameRunning = false;
                         betId = null;
-                        gameId = null;
                         localStorage.removeItem('betId');
                         localStorage.removeItem('gameRunning');
-                        localStorage.removeItem('gameId');
-                        document.getElementById('cashoutBtn').disabled = true;
                     }
+                    document.getElementById('cashoutBtn').disabled = true;
                     updateGameState();
                     return;
                 }
@@ -477,28 +546,23 @@
                 }
                 lastGameState = gameData;
                 gameId = gameData.game_id;
+                localStorage.setItem('gameId', gameId);
 
-                let multiplier = parseFloat(gameData.multiplier || 1.0);
-                if (gameData.phase === 'crashed') {
-                    // Try cash-out with crash point if just crashed
-                    multiplier = parseFloat(gameData.crash_point || 1.0);
-                    document.getElementById('status').textContent = `Game just crashed at ${multiplier.toFixed(2)}x. Attempting cash out...`;
-                } else if (gameData.phase !== 'running') {
+                if (gameData.phase !== 'running') {
                     document.getElementById('status').textContent = `Cannot cash out: Game in ${gameData.phase} phase`;
                     if (gameData.phase === 'crashed') {
-                        document.getElementById('status').textContent = `Too late: Game crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x! You lost.`;
+                        document.getElementById('status').textContent = `Game crashed at ${parseFloat(gameData.crash_point).toFixed(2)}x! Bet lost.`;
                         gameRunning = false;
                         betId = null;
-                        gameId = null;
                         localStorage.removeItem('betId');
                         localStorage.removeItem('gameRunning');
-                        localStorage.removeItem('gameId');
                         document.getElementById('cashoutBtn').disabled = true;
                         updateGameState();
                     }
                     return;
                 }
 
+                const multiplier = parseFloat(gameData.multiplier);
                 console.log('cashout request:', { bet_id: betId, multiplier: multiplier.toFixed(2), game_id: gameId });
                 const cashoutResponse = await fetch('api.php?action=cashout', {
                     method: 'POST',
@@ -509,17 +573,14 @@
                 console.log('cashout response:', cashoutResponseText, 'Status:', cashoutResponse.status);
                 const data = JSON.parse(cashoutResponseText);
                 if (data.error) {
-                    document.getElementById('status').textContent = `Cashout failed: ${data.error}`;
-                    if (data.error.includes('Game crashed') || data.error.includes('Game not found or not in running phase') || data.error.includes('Invalid bet or already cashed out')) {
-                        if (data.error.includes('Game crashed')) {
-                            document.getElementById('status').textContent = `Too late: Game crashed at ${parseFloat(data.crash_point || gameData.crash_point || 1.0).toFixed(2)}x! You lost.`;
-                        }
+                    document.getElementById('status').textContent = data.error.includes('Game crashed') 
+                        ? `Game crashed at ${parseFloat(data.crash_point || gameData.crash_point || 1.0).toFixed(2)}x! Bet lost.` 
+                        : `Cashout failed: ${data.error}`;
+                    if (data.error.includes('Game crashed') || data.error.includes('Game not found') || data.error.includes('Invalid bet or already cashed out')) {
                         gameRunning = false;
                         betId = null;
-                        gameId = null;
                         localStorage.removeItem('betId');
                         localStorage.removeItem('gameRunning');
-                        localStorage.removeItem('gameId');
                         document.getElementById('cashoutBtn').disabled = true;
                         updateGameState();
                     }
@@ -529,16 +590,54 @@
                 document.getElementById('cashoutBtn').disabled = true;
                 gameRunning = false;
                 betId = null;
-                gameId = null;
                 localStorage.removeItem('betId');
                 localStorage.removeItem('gameRunning');
-                localStorage.removeItem('gameId');
                 fetchUser();
                 fetchHistory();
             } catch (error) {
                 console.error('cashout error:', error.message);
                 document.getElementById('status').textContent = 'Error submitting cashout: ' + error.message;
                 updateGameState();
+            }
+        }
+
+        async function setGameSettings() {
+            if (!isAdmin) {
+                document.getElementById('status').textContent = 'Access denied: Admin only';
+                return;
+            }
+            const bettingDurationInput = parseFloat(document.getElementById('bettingDuration').value);
+            const runningDurationInput = parseFloat(document.getElementById('runningDuration').value);
+            if (isNaN(bettingDurationInput) || bettingDurationInput < 5 || bettingDurationInput > 30 ||
+                isNaN(runningDurationInput) || runningDurationInput < 10 || runningDurationInput > 120) {
+                document.getElementById('status').textContent = 'Invalid durations: Betting (5-30s), Running (10-120s)';
+                return;
+            }
+
+            try {
+                const response = await fetch('api.php?action=set_game_settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        admin_id: userId,
+                        betting_duration: bettingDurationInput,
+                        running_duration: runningDurationInput
+                    })
+                });
+                const responseText = await response.text();
+                console.log('set_game_settings:', responseText, 'Status:', response.status);
+                const data = JSON.parse(responseText);
+                document.getElementById('status').textContent = data.error || 'Game settings updated';
+                if (!data.error) {
+                    bettingDuration = bettingDurationInput;
+                    runningDuration = runningDurationInput;
+                    document.getElementById('bettingDuration').value = '';
+                    document.getElementById('runningDuration').value = '';
+                    updateGameState();
+                }
+            } catch (error) {
+                console.error('setGameSettings error:', error.message);
+                document.getElementById('status').textContent = 'Error updating game settings: ' + error.message;
             }
         }
 

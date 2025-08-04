@@ -9,9 +9,6 @@ $db = 'kasunpre_av';
 $user = 'kasunpre_av';
 $pass = 'Kasun2052';
 
-const BETTING_DURATION = 10;
-const CASH_OUT_GRACE_PERIOD = 0.2; // 200ms grace period for cash-out after crash
-
 try {
     $pdo = new PDO("mysql:host=$host;dbname=$db", $user, $pass);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -115,6 +112,71 @@ switch ($action) {
         }
         break;
 
+    case 'get_user':
+        if ($method === 'GET') {
+            $user_id = $_GET['user_id'] ?? 0;
+            try {
+                $stmt = $pdo->prepare('SELECT u.id, u.username, u.balance, COUNT(a.id) as is_admin FROM users u LEFT JOIN admins a ON u.id = a.id WHERE u.id = ?');
+                $stmt->execute([$user_id]);
+                $user = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($user) {
+                    $user['balance'] = floatval($user['balance']);
+                    $user['is_admin'] = $user['is_admin'] > 0;
+                    unset($user['password']);
+                    error_log("get_user: user_id=$user_id, username={$user['username']}, is_admin={$user['is_admin']}");
+                    echo json_encode($user);
+                } else {
+                    error_log("get_user: User not found, user_id=$user_id");
+                    http_response_code(404);
+                    echo json_encode(['error' => 'User not found']);
+                }
+            } catch (PDOException $e) {
+                error_log("get_user PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+            }
+        }
+        break;
+
+    case 'set_game_settings':
+        if ($method === 'POST') {
+            $data = json_decode(file_get_contents('php://input'), true);
+            $admin_id = $data['admin_id'] ?? 0;
+            $betting_duration = floatval($data['betting_duration'] ?? 10);
+            $running_duration = floatval($data['running_duration'] ?? 60);
+
+            error_log("set_game_settings input: admin_id=$admin_id, betting_duration=$betting_duration, running_duration=$running_duration");
+
+            if ($betting_duration < 5 || $betting_duration > 30 || $running_duration < 10 || $running_duration > 120) {
+                error_log("Invalid durations: betting_duration=$betting_duration, running_duration=$running_duration");
+                http_response_code(400);
+                echo json_encode(['error' => 'Invalid durations: Betting (5-30s), Running (10-120s)']);
+                exit;
+            }
+
+            try {
+                $stmt = $pdo->prepare('SELECT id FROM admins WHERE id = ?');
+                $stmt->execute([$admin_id]);
+                if (!$stmt->fetch()) {
+                    error_log("Invalid admin_id: $admin_id");
+                    http_response_code(401);
+                    echo json_encode(['error' => 'Invalid admin ID']);
+                    exit;
+                }
+
+                $stmt = $pdo->prepare('INSERT INTO game_settings (betting_duration, running_duration, set_by_admin_id) VALUES (?, ?, ?)');
+                $stmt->execute([$betting_duration, $running_duration, $admin_id]);
+                error_log("Game settings updated: betting_duration=$betting_duration, running_duration=$running_duration, admin_id=$admin_id");
+                echo json_encode(['message' => 'Game settings updated']);
+            } catch (PDOException $e) {
+                error_log("set_game_settings PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+                exit;
+            }
+        }
+        break;
+
     case 'set_crash_points':
         if ($method === 'POST') {
             $data = json_decode(file_get_contents('php://input'), true);
@@ -166,6 +228,12 @@ switch ($action) {
     case 'get_game_state':
         if ($method === 'GET') {
             try {
+                $stmt = $pdo->prepare('SELECT betting_duration, running_duration FROM game_settings ORDER BY created_at DESC LIMIT 1');
+                $stmt->execute();
+                $settings = $stmt->fetch(PDO::FETCH_ASSOC);
+                $betting_duration = $settings ? floatval($settings['betting_duration']) : 10.0;
+                $running_duration = $settings ? floatval($settings['running_duration']) : 60.0;
+
                 $game_id = $_GET['game_id'] ?? 0;
                 if ($game_id > 0) {
                     $stmt = $pdo->prepare('SELECT id, crash_point, phase, start_time FROM games WHERE id = ? AND is_active = TRUE');
@@ -181,25 +249,28 @@ switch ($action) {
                     $current_time = time();
                     $elapsed = $game['start_time'] ? $current_time - $game['start_time'] : 0;
                     $game['elapsed'] = $elapsed;
+                    $game['betting_duration'] = $betting_duration;
+                    $game['running_duration'] = $running_duration;
 
-                    if ($game['phase'] === 'betting' && $elapsed > 30) {
+                    if ($game['phase'] === 'betting' && $elapsed > $betting_duration * 2) {
                         error_log("Stale betting phase detected: game_id={$game['id']}, elapsed=$elapsed. Resetting game.");
                         $stmt = $pdo->prepare('UPDATE games SET phase = ?, is_active = FALSE WHERE id = ?');
                         $stmt->execute(['crashed', $game['id']]);
                         $game = null;
-                    } elseif ($game['phase'] === 'betting' && $elapsed >= BETTING_DURATION) {
+                    } elseif ($game['phase'] === 'betting' && $elapsed >= $betting_duration) {
                         $stmt = $pdo->prepare('UPDATE games SET phase = ?, start_time = NOW() WHERE id = ?');
                         $stmt->execute(['running', $game['id']]);
                         $game['phase'] = 'running';
                         $game['start_time'] = $current_time;
                         $game['elapsed'] = 0;
+                    } elseif ($game['phase'] === 'running' && $elapsed >= $running_duration) {
+                        $stmt = $pdo->prepare('UPDATE games SET phase = ?, is_active = FALSE WHERE id = ?');
+                        $stmt->execute(['crashed', $game['id']]);
+                        $game['phase'] = 'crashed';
+                        $game['multiplier'] = $game['crash_point'];
                     } elseif ($game['phase'] === 'running') {
-                        $multiplier = 1 + ($elapsed * 0.5);
-                        if ($multiplier >= $game['crash_point']) {
-                            $stmt = $pdo->prepare('UPDATE games SET phase = ?, is_active = FALSE WHERE id = ?');
-                            $stmt->execute(['crashed', $game['id']]);
-                            $game['phase'] = 'crashed';
-                        }
+                        $progress = $elapsed / $running_duration;
+                        $multiplier = 1 + ($progress * ($game['crash_point'] - 1));
                         $game['multiplier'] = round($multiplier, 2);
                     } else {
                         $game['multiplier'] = 1.0;
@@ -224,7 +295,9 @@ switch ($action) {
                         'phase' => 'betting',
                         'start_time' => time(),
                         'elapsed' => 0,
-                        'multiplier' => 1.0
+                        'multiplier' => 1.0,
+                        'betting_duration' => $betting_duration,
+                        'running_duration' => $running_duration
                     ]);
                 }
             } catch (PDOException $e) {
@@ -353,10 +426,10 @@ switch ($action) {
                     echo json_encode(['error' => 'Bet already cashed out']);
                     exit;
                 }
-                if (!$bet['is_active'] || ($bet['phase'] !== 'running' && $bet['phase'] !== 'crashed')) {
-                    error_log("validate_bet: Game not in valid phase, game_id=$game_id, phase={$bet['phase']}, is_active={$bet['is_active']}");
+                if (!$bet['is_active'] || $bet['phase'] !== 'running') {
+                    error_log("validate_bet: Game not in running phase, game_id=$game_id, phase={$bet['phase']}, is_active={$bet['is_active']}");
                     http_response_code(400);
-                    echo json_encode(['error' => 'Game not in valid phase for cashout']);
+                    echo json_encode(['error' => 'Game not in running phase']);
                     exit;
                 }
                 error_log("validate_bet: Valid bet, bet_id=$bet_id, game_id=$game_id, user_id=$user_id, phase={$bet['phase']}");
@@ -387,7 +460,7 @@ switch ($action) {
                     exit;
                 }
 
-                $stmt = $pdo->prepare('SELECT crash_point, phase, start_time, updated_at FROM games WHERE id = ? AND is_active = TRUE');
+                $stmt = $pdo->prepare('SELECT crash_point, phase, start_time FROM games WHERE id = ? AND is_active = TRUE');
                 $stmt->execute([$game_id]);
                 $game = $stmt->fetch(PDO::FETCH_ASSOC);
                 if (!$game) {
@@ -397,33 +470,33 @@ switch ($action) {
                     exit;
                 }
 
-                $elapsed = time() - strtotime($game['start_time']);
-                $server_multiplier = round(1 + ($elapsed * 0.5), 2);
-                $crash_point = floatval($game['crash_point']);
-                $is_recent_crash = $game['phase'] === 'crashed' && (time() - strtotime($game['updated_at']) <= CASH_OUT_GRACE_PERIOD);
-
-                if ($game['phase'] !== 'running' && !$is_recent_crash) {
-                    error_log("Game not in valid phase: game_id=$game_id, phase={$game['phase']}, time_since_crash=" . (time() - strtotime($game['updated_at'])));
+                if ($game['phase'] !== 'running') {
+                    error_log("Game not in running phase: game_id=$game_id, phase={$game['phase']}");
                     http_response_code(400);
-                    echo json_encode(['error' => 'Game not in running phase', 'crash_point' => $crash_point]);
+                    echo json_encode(['error' => 'Game not in running phase', 'crash_point' => floatval($game['crash_point'])]);
                     exit;
                 }
 
-                $final_multiplier = $multiplier;
-                if ($is_recent_crash) {
-                    $final_multiplier = $crash_point;
-                    error_log("Using crash point for recent crash: game_id=$game_id, crash_point=$crash_point");
-                } elseif ($server_multiplier >= $crash_point) {
+                $stmt = $pdo->prepare('SELECT betting_duration, running_duration FROM game_settings ORDER BY created_at DESC LIMIT 1');
+                $stmt->execute();
+                $settings = $stmt->fetch(PDO::FETCH_ASSOC);
+                $running_duration = $settings ? floatval($settings['running_duration']) : 60.0;
+
+                $elapsed = time() - strtotime($game['start_time']);
+                $progress = $elapsed / $running_duration;
+                $crash_point = floatval($game['crash_point']);
+                $server_multiplier = round(1 + ($progress * ($crash_point - 1)), 2);
+
+                if ($server_multiplier >= $crash_point) {
                     $stmt = $pdo->prepare('UPDATE games SET phase = ?, is_active = FALSE WHERE id = ?');
                     $stmt->execute(['crashed', $game_id]);
                     error_log("Game crashed: game_id=$game_id, server_multiplier=$server_multiplier, crash_point=$crash_point");
                     http_response_code(400);
                     echo json_encode(['error' => 'Game crashed', 'crash_point' => $crash_point]);
                     exit;
-                } else {
-                    $final_multiplier = $multiplier > 0 && $multiplier <= $crash_point ? $multiplier : $server_multiplier;
                 }
 
+                $final_multiplier = $multiplier > 0 && $multiplier <= $crash_point ? $multiplier : $server_multiplier;
                 if ($final_multiplier <= 0 || $final_multiplier > $crash_point) {
                     error_log("Invalid multiplier: client_multiplier=$multiplier, server_multiplier=$server_multiplier, crash_point=$crash_point");
                     http_response_code(400);
@@ -483,6 +556,53 @@ switch ($action) {
         }
         break;
 
+    case 'get_history':
+        if ($method === 'GET') {
+            try {
+                $user_id = $_GET['user_id'] ?? 0;
+                $stmt = $pdo->prepare('SELECT b.id, b.user_id, b.game_id, b.bet_amount, b.cashout_multiplier, b.win_amount, b.cashout_status, b.created_at, u.username, g.crash_point 
+                                      FROM bets b 
+                                      JOIN users u ON b.user_id = u.id 
+                                      JOIN games g ON b.game_id = g.id 
+                                      WHERE b.user_id = ? 
+                                      ORDER BY b.created_at DESC');
+                $stmt->execute([$user_id]);
+                $bets = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($bets as &$bet) {
+                    $bet['bet_amount'] = floatval($bet['bet_amount']);
+                    $bet['cashout_multiplier'] = floatval($bet['cashout_multiplier']);
+                    $bet['win_amount'] = floatval($bet['win_amount']);
+                    $bet['crash_point'] = floatval($bet['crash_point']);
+                }
+                error_log("get_history: user_id=$user_id, count=" . count($bets));
+                echo json_encode($bets);
+            } catch (PDOException $e) {
+                error_log("get_history PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+            }
+        }
+        break;
+
+    case 'get_crash_history':
+        if ($method === 'GET') {
+            try {
+                $stmt = $pdo->prepare('SELECT id, crash_point, created_at FROM games WHERE phase = ? ORDER BY created_at DESC LIMIT 10');
+                $stmt->execute(['crashed']);
+                $crashes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($crashes as &$crash) {
+                    $crash['crash_point'] = floatval($crash['crash_point']);
+                }
+                error_log("get_crash_history: count=" . count($crashes));
+                echo json_encode($crashes);
+            } catch (PDOException $e) {
+                error_log("get_crash_history PDO error: " . $e->getMessage());
+                http_response_code(500);
+                echo json_encode(['error' => 'Database error']);
+            }
+        }
+        break;
+
     case 'request_transaction':
         if ($method === 'POST') {
             try {
@@ -534,218 +654,13 @@ switch ($action) {
                 $stmt->execute([$user_id, $amount, $type, 'pending']);
                 $request_id = $pdo->lastInsertId();
                 error_log("Transaction request submitted: user_id=$user_id, amount=$amount, type=$type, request_id=$request_id");
-                echo json_encode(['message' => ucfirst($type) . ' request submitted', 'request_id' => $request_id]);
+                echo json_encode(['message' => ucfirst($type) . ' request submitted']);
             } catch (PDOException $e) {
                 error_log("request_transaction PDO error: " . $e->getMessage());
                 http_response_code(500);
-                echo json_encode(['error' => 'Database error: ' . $e->getMessage()]);
-                exit;
-            } catch (Exception $e) {
-                error_log("request_transaction error: " . $e->getMessage());
-                http_response_code(500);
-                echo json_encode(['error' => 'Server error: ' . $e->getMessage()]);
-                exit;
-            }
-        }
-        break;
-
-    case 'get_pending_transactions':
-        if ($method === 'GET') {
-            try {
-                $stmt = $pdo->prepare('SELECT t.id, t.user_id, t.amount, t.type, u.username FROM topup_requests t JOIN users u ON t.user_id = u.id WHERE t.status = ?');
-                $stmt->execute(['pending']);
-                $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($requests as &$request) {
-                    $request['amount'] = floatval($request['amount']);
-                }
-                error_log("get_pending_transactions: count=" . count($requests));
-                echo json_encode($requests);
-            } catch (PDOException $e) {
-                error_log("get_pending_transactions PDO error: " . $e->getMessage());
-                http_response_code(500);
                 echo json_encode(['error' => 'Database error']);
                 exit;
             }
-        }
-        break;
-
-    case 'approve_transaction':
-        if ($method === 'POST') {
-            try {
-                $data = json_decode(file_get_contents('php://input'), true);
-                $request_id = $data['request_id'] ?? 0;
-                $stmt = $pdo->prepare('SELECT user_id, amount, type FROM topup_requests WHERE id = ? AND status = ?');
-                $stmt->execute([$request_id, 'pending']);
-                $request = $stmt->fetch(PDO::FETCH_ASSOC);
-                if (!$request) {
-                    error_log("Invalid or already processed transaction request: request_id=$request_id");
-                    http_response_code(400);
-                    echo json_encode(['error' => 'Invalid or already processed request']);
-                    exit;
-                }
-
-                if ($request['type'] === 'withdraw') {
-                    $stmt = $pdo->prepare('SELECT balance FROM users WHERE id = ?');
-                    $stmt->execute([$request['user_id']]);
-                    $user = $stmt->fetch(PDO::FETCH_ASSOC);
-                    if (!$user || floatval($user['balance']) < floatval($request['amount'])) {
-                        error_log("Insufficient balance for withdraw approval: user_id={$request['user_id']}, balance=" . ($user['balance'] ?? 'N/A') . ", amount={$request['amount']}");
-                        http_response_code(400);
-                        echo json_encode(['error' => 'Insufficient balance']);
-                        exit;
-                    }
-                    $stmt = $pdo->prepare('UPDATE users SET balance = balance - ? WHERE id = ?');
-                    $stmt->execute([floatval($request['amount']), $request['user_id']]);
-                } elseif ($request['type'] === 'topup') {
-                    $stmt = $pdo->prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
-                    $stmt->execute([floatval($request['amount']), $request['user_id']]);
-                }
-
-                $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ?');
-                $stmt->execute(['approved', $request_id]);
-                error_log("Transaction approved: request_id=$request_id, user_id={$request['user_id']}, amount={$request['amount']}, type={$request['type']}");
-                echo json_encode(['message' => ucfirst($request['type']) . ' approved']);
-            } catch (PDOException $e) {
-                error_log("approve_transaction PDO error: " . $e->getMessage());
-                http_response_code(500);
-                echo json_encode(['error' => 'Database error']);
-                exit;
-            }
-        }
-        break;
-
-    case 'reject_transaction':
-        if ($method === 'POST') {
-            try {
-                $data = json_decode(file_get_contents('php://input'), true);
-                $request_id = $data['request_id'] ?? 0;
-                $stmt = $pdo->prepare('UPDATE topup_requests SET status = ? WHERE id = ? AND status = ?');
-                $stmt->execute(['rejected', $request_id, 'pending']);
-                if ($stmt->rowCount() > 0) {
-                    error_log("Transaction rejected: request_id=$request_id");
-                    echo json_encode(['message' => 'Transaction rejected']);
-                } else {
-                    error_log("Invalid or already processed transaction request: request_id=$request_id");
-                    http_response_code(400);
-                    echo json_encode(['error' => 'Invalid or already processed request']);
-                }
-            } catch (PDOException $e) {
-                error_log("reject_transaction PDO error: " . $e->getMessage());
-                http_response_code(500);
-                echo json_encode(['error' => 'Database error']);
-                exit;
-            }
-        }
-        break;
-
-    case 'get_crash_history':
-        if ($method === 'GET') {
-            try {
-                $stmt = $pdo->prepare('SELECT id, crash_point, created_at FROM games ORDER BY created_at DESC');
-                $stmt->execute();
-                $crashes = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($crashes as &$crash) {
-                    $crash['crash_point'] = floatval($crash['crash_point']);
-                }
-                error_log("get_crash_history: count=" . count($crashes));
-                echo json_encode($crashes);
-            } catch (PDOException $e) {
-                error_log("get_crash_history PDO error: " . $e->getMessage());
-                http_response_code(500);
-                echo json_encode(['error' => 'Database error']);
-                exit;
-            }
-        }
-        break;
-
-    case 'get_user':
-        if ($method === 'GET') {
-            $user_id = $_GET['user_id'] ?? 0;
-            error_log("get_user input: user_id=$user_id");
-            if ($user_id <= 0) {
-                error_log("Invalid user_id: $user_id");
-                http_response_code(400);
-                echo json_encode(['error' => 'Invalid user ID']);
-                exit;
-            }
-            try {
-                $stmt = $pdo->prepare('SELECT id, username, balance FROM users WHERE id = ?');
-                $stmt->execute([$user_id]);
-                $user = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($user) {
-                    $user['balance'] = floatval($user['balance']);
-                    error_log("get_user success: user_id=$user_id, username={$user['username']}, balance={$user['balance']}, type=" . gettype($user['balance']));
-                    echo json_encode($user);
-                } else {
-                    error_log("User not found: user_id=$user_id");
-                    http_response_code(404);
-                    echo json_encode(['error' => 'User not found']);
-                }
-            } catch (PDOException $e) {
-                error_log("get_user PDO error: " . $e->getMessage());
-                http_response_code(500);
-                echo json_encode(['error' => 'Database error']);
-                exit;
-            }
-        }
-        break;
-
-    case 'get_history':
-        if ($method === 'GET') {
-            try {
-                $user_id = $_GET['user_id'] ?? 0;
-                $stmt = $pdo->prepare('SELECT b.*, g.crash_point FROM bets b JOIN games g ON b.game_id = g.id WHERE b.user_id = ? ORDER BY b.created_at DESC');
-                $stmt->execute([$user_id]);
-                $history = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($history as &$bet) {
-                    $bet['bet_amount'] = floatval($bet['bet_amount']);
-                    $bet['cashout_multiplier'] = floatval($bet['cashout_multiplier'] ?? 0);
-                    $bet['win_amount'] = floatval($bet['win_amount'] ?? 0);
-                    $bet['crash_point'] = floatval($bet['crash_point']);
-                }
-                error_log("get_history: user_id=$user_id, history_count=" . count($history));
-                echo json_encode($history);
-            } catch (PDOException $e) {
-                error_log("get_history PDO error: " . $e->getMessage());
-                http_response_code(500);
-                echo json_encode(['error' => 'Database error']);
-                exit;
-            }
-        }
-        break;
-
-    case 'debug_bet':
-        if ($method === 'GET') {
-            $bet_id = $_GET['bet_id'] ?? 0;
-            $user_id = $_GET['user_id'] ?? 0;
-            error_log("debug_bet input: bet_id=$bet_id, user_id=$user_id");
-            try {
-                $stmt = $pdo->prepare('SELECT b.id, b.game_id, b.user_id, b.bet_amount, b.cashout_status, b.cashout_multiplier, g.phase, g.crash_point FROM bets b JOIN games g ON b.game_id = g.id WHERE b.id = ? AND b.user_id = ?');
-                $stmt->execute([$bet_id, $user_id]);
-                $bet = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($bet) {
-                    $bet['bet_amount'] = floatval($bet['bet_amount']);
-                    $bet['cashout_multiplier'] = floatval($bet['cashout_multiplier'] ?? 0);
-                    $bet['crash_point'] = floatval($bet['crash_point']);
-                    error_log("debug_bet result: bet_id=$bet_id, user_id=$user_id, game_id={$bet['game_id']}, phase={$bet['phase']}");
-                    echo json_encode($bet);
-                } else {
-                    error_log("debug_bet: No bet found for bet_id=$bet_id, user_id=$user_id");
-                    http_response_code(404);
-                    echo json_encode(['error' => 'Bet not found']);
-                }
-            } catch (PDOException $e) {
-                error_log("debug_bet PDO error: " . $e->getMessage());
-                http_response_code(500);
-                echo json_encode(['error' => 'Database error']);
-            }
-        }
-        break;
-
-    case 'debug':
-        if ($method === 'GET') {
-            error_log("Debug endpoint called");
-            echo json_encode(['status' => 'OK', 'timestamp' => date('Y-m-d H:i:s'), 'php_version' => phpversion(), 'pdo_enabled' => extension_loaded('pdo_mysql')]);
         }
         break;
 
